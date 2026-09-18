@@ -1,12 +1,14 @@
 // -*- coding: utf-8 -*-
 /*
- * furina_gui.cs - 芙宁娜整合启动器图形界面
+ * furina_gui.cs - 芙宁娜整合启动器图形界面（v3）
  *
- * 启动流程：SplashForm（进度条 + "稍等片刻，你的蓝莓小蛋糕正在路上……"逐字弹跳动画）
- *           后台完成配置载入后再进入主界面。
- * 主界面：组件路径（逐项即时校验 ✓/✗，NewAPI 三项依赖网关程序校验通过才可填写）、
- *         行为（两个勾选项互斥）、运行（状态灯 + 启停）、实时日志。
- * 状态探活在后台线程执行，避免 HTTP 超时阻塞 UI。
+ * 启动流程：SplashForm（渐变背景 + "稍等片刻，你的蓝莓小蛋糕正在路上……"
+ *           逐字弹跳动画：幼圆体、上白下蓝渐变、easeOutBounce 非线性缓动、
+ *           渲染线程贴合显示器刷新率）。若配置完整（AIRI 与 TTS 脚本路径有效，
+ *           NewAPI 可选）则在 Splash 阶段直接拉起全部组件，主界面打开即为
+ *           "已启动"状态。
+ * 主界面：组件路径（逐项即时校验 ✓/✗）、行为（互斥）、运行（启停 + 状态灯 + 教程）、
+ *         实时日志。状态探活在后台线程执行，不卡 UI。
  *
  * 不带参数双击 = GUI；带参数（如 --console / --exit-after=N）走控制台模式。
  */
@@ -14,14 +16,20 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.IO;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
 class Program
 {
+    public static bool AutoStarted;
+    public static Thread AutoRunThread;
+
     [STAThread]
     static int Main(string[] args)
     {
@@ -35,75 +43,137 @@ class Program
         };
         Furina.InitPaths();
 
-        // 启动画面：动画播放与配置载入并行，两者都完成才进主界面
         SplashForm splash = new SplashForm();
         splash.Show();
         ManualResetEvent initDone = new ManualResetEvent(false);
+        bool[] autoStart = new bool[1];
         new Thread(delegate ()
         {
-            try { Furina.LoadIni(); }
+            try
+            {
+                Furina.LoadIni();
+                autoStart[0] = ConfigComplete(Furina.cfg);
+            }
             catch { }
             Thread.Sleep(2300); // 至少放完一轮动画
             initDone.Set();
         }) { IsBackground = true }.Start();
         while (!initDone.WaitOne(0)) Application.DoEvents();
+
+        if (autoStart[0])
+        {
+            // 配置完整：在启动画面阶段直接拉起全部组件
+            AutoStarted = true;
+            Furina.ResetState();
+            AutoRunThread = new Thread(CoreRunWorker);
+            AutoRunThread.IsBackground = true;
+            AutoRunThread.Start();
+            Thread.Sleep(500); // 让启动日志先滚动起来
+        }
         splash.Close();
 
         Application.Run(new MainForm());
         return 0;
     }
+
+    // 配置完整性：AIRI 与 TTS 启动脚本必填且存在；NewAPI 可空（不使用网关）
+    static bool ConfigComplete(Furina.Cfg c)
+    {
+        return !string.IsNullOrEmpty(c.AiriExe) && File.Exists(c.AiriExe)
+            && !string.IsNullOrEmpty(c.TtsBat) && File.Exists(Furina.ResolvePath(c.TtsBat));
+    }
+
+    // 自动启动与手动启动共用的运行体
+    public static void CoreRunWorker()
+    {
+        try
+        {
+            Furina.RunAll();
+            Furina.WatchdogLoop(0);
+        }
+        catch (Exception e)
+        {
+            Furina.Log("运行异常: " + e);
+        }
+        finally
+        {
+            Furina.Teardown();
+        }
+    }
 }
 
 // ---------------------------------------------------------------
-// 启动画面
+// 启动画面：渐变背景 + 逐字弹跳（非线性缓动，贴合显示器刷新率）
 // ---------------------------------------------------------------
+
+class CharLabel : Label
+{
+    // 文字纵向渐变：上白下蓝，逐渐变深
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        e.Graphics.TextRenderingHint = TextRenderingHint.AntiAlias;
+        using (LinearGradientBrush br = new LinearGradientBrush(
+            new Rectangle(0, 0, Width, Height),
+            Color.White, Color.FromArgb(25, 90, 205), LinearGradientMode.Vertical))
+        using (StringFormat fmt = new StringFormat
+        { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+        {
+            e.Graphics.DrawString(Text, Font, br, new RectangleF(0, 0, Width, Height), fmt);
+        }
+    }
+}
 
 class SplashForm : Form
 {
     const string MSG = "稍等片刻，你的蓝莓小蛋糕正在路上……";
-    readonly Label[] chars = new Label[MSG.Length];
-    readonly int baseY = 66;
-    int tick;
-    readonly System.Windows.Forms.Timer tmr;
+    readonly CharLabel[] chars = new CharLabel[MSG.Length];
+    readonly int baseY = 70;
+    readonly int[] positions = new int[MSG.Length];
+    readonly bool[] shown = new bool[MSG.Length];
+
+    volatile bool stopRender;
+    Thread renderThread;
+    double cycleStart;
+    int refreshHz = 60;
+
+    // 每字延迟登场与弹跳时长（秒），落稳后停留时长
+    const double CHAR_DELAY = 0.085, CHAR_DUR = 0.95, HOLD = 0.9;
 
     public SplashForm()
     {
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(520, 230);
-        BackColor = Color.FromArgb(255, 246, 250);
+        Size = new Size(560, 240);
         DoubleBuffered = true;
 
         Label caption = new Label();
-        caption.Text = "furina 正在初始化";
-        caption.Font = new Font("Microsoft YaHei UI", 9);
-        caption.ForeColor = Color.Gray;
+        caption.Text = "furina";
+        caption.Font = new Font("Segoe UI", 10, FontStyle.Italic);
+        caption.ForeColor = Color.FromArgb(120, 150, 190);
         caption.AutoSize = true;
-        caption.Location = new Point((Width - caption.PreferredWidth) / 2, 24);
+        caption.BackColor = Color.Transparent;
+        caption.Location = new Point((Width - caption.PreferredWidth) / 2, 26);
         Controls.Add(caption);
 
+        Font f = PickFont();
         using (Graphics g = CreateGraphics())
         {
-            // 按实际字宽居中排布每个字
-            Font f = new Font("Microsoft YaHei UI", 17, FontStyle.Bold);
             int total = 0;
             int[] widths = new int[MSG.Length];
             for (int i = 0; i < MSG.Length; i++)
             {
-                widths[i] = TextRenderer.MeasureText(g, MSG[i].ToString(), f).Width - 6;
+                widths[i] = TextRenderer.MeasureText(g, MSG[i].ToString(), f).Width - 7;
                 total += widths[i];
             }
             int x = (Width - total) / 2;
             for (int i = 0; i < MSG.Length; i++)
             {
-                chars[i] = new Label();
+                chars[i] = new CharLabel();
                 chars[i].Text = MSG[i].ToString();
                 chars[i].Font = f;
-                chars[i].ForeColor = Color.FromArgb(214, 84, 140);
-                chars[i].AutoSize = false;
-                chars[i].Size = new Size(widths[i] + 8, 34);
-                chars[i].TextAlign = ContentAlignment.MiddleCenter;
-                chars[i].Location = new Point(x, baseY - 60);
+                chars[i].BackColor = Color.Transparent;
+                chars[i].Size = new Size(widths[i] + 9, 38);
+                chars[i].Location = new Point(x, baseY - 80);
                 chars[i].Visible = false;
                 Controls.Add(chars[i]);
                 x += widths[i];
@@ -112,44 +182,210 @@ class SplashForm : Form
 
         ProgressBar bar = new ProgressBar();
         bar.Style = ProgressBarStyle.Marquee;
-        bar.Size = new Size(380, 10);
-        bar.Location = new Point((Width - 380) / 2, 150);
+        bar.Size = new Size(400, 8);
+        bar.Location = new Point((Width - 400) / 2, 170);
         Controls.Add(bar);
 
-        tmr = new System.Windows.Forms.Timer();
-        tmr.Interval = 30;
-        tmr.Tick += delegate { Animate(); };
-        tmr.Start();
+        refreshHz = GetRefreshHz();
+        cycleStart = Environment.TickCount / 1000.0;
+        renderThread = new Thread(RenderLoop);
+        renderThread.IsBackground = true;
+        renderThread.Priority = ThreadPriority.AboveNormal;
+        renderThread.Start();
     }
 
-    void Animate()
+    static Font PickFont()
     {
-        tick++;
-        bool allLanded = true;
+        string[] preferred = { "幼圆", "YouYuan", "Microsoft YaHei UI" };
+        InstalledFontCollection ifc = new InstalledFontCollection();
+        foreach (string name in preferred)
+        {
+            foreach (FontFamily ff in ifc.Families)
+            {
+                if (ff.Name == name)
+                    return new Font(ff, 17, FontStyle.Bold);
+            }
+        }
+        return new Font(FontFamily.GenericSansSerif, 17, FontStyle.Bold);
+    }
+
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        using (LinearGradientBrush br = new LinearGradientBrush(
+            ClientRectangle, Color.White, Color.FromArgb(222, 236, 252),
+            LinearGradientMode.Vertical))
+        {
+            e.Graphics.FillRectangle(br, ClientRectangle);
+        }
+    }
+
+    // Penner easeOutBounce：非线性下落 + 真实弹跳衰减
+    static double EaseOutBounce(double t)
+    {
+        const double n1 = 7.5625, d1 = 2.75;
+        if (t < 1 / d1) return n1 * t * t;
+        if (t < 2 / d1) { t -= 1.5 / d1; return n1 * t * t + 0.75; }
+        if (t < 2.5 / d1) { t -= 2.25 / d1; return n1 * t * t + 0.9375; }
+        t -= 2.625 / d1;
+        return n1 * t * t + 0.984375;
+    }
+
+    void RenderLoop()
+    {
+        Stopwatch sw = Stopwatch.StartNew();
+        double frameMs = 1000.0 / refreshHz;
+        while (!stopRender)
+        {
+            double frameStart = sw.Elapsed.TotalMilliseconds;
+            ComputeFrame();
+            if (IsHandleCreated && !IsDisposed)
+            {
+                try { BeginInvoke((Action)ApplyFrame); } catch { }
+            }
+            // 贴帧：自旋到下一帧边界（Sleep 的 15ms 粒度达不到高刷）
+            while (sw.Elapsed.TotalMilliseconds - frameStart < frameMs)
+            {
+                Thread.SpinWait(500);
+            }
+        }
+    }
+
+    void ComputeFrame()
+    {
+        double now = Environment.TickCount / 1000.0;
+        double cycleLen = MSG.Length * CHAR_DELAY + CHAR_DUR + HOLD;
+        if (now - cycleStart > cycleLen) cycleStart = now; // 循环播放
+        double t = now - cycleStart;
         for (int i = 0; i < chars.Length; i++)
         {
-            int start = i * 7;                 // 逐字延迟登场
-            double p = (tick - start) / 45.0;  // 每个字 45 tick 完成
-            if (p < 0) { chars[i].Visible = false; allLanded = false; continue; }
-            chars[i].Visible = true;
-            if (p >= 1)
+            double p = (t - i * CHAR_DELAY) / CHAR_DUR;
+            if (p < 0)
             {
-                chars[i].Top = baseY;
-                continue;
+                shown[i] = false;
+                positions[i] = baseY - 80;
             }
-            allLanded = false;
-            chars[i].Top = baseY - BounceOffset(p);
+            else if (p >= 1)
+            {
+                shown[i] = true;
+                positions[i] = baseY;
+            }
+            else
+            {
+                shown[i] = true;
+                positions[i] = baseY - (int)((1 - EaseOutBounce(p)) * 80);
+            }
         }
-        // 全部落稳后停 30 tick 再循环
-        if (allLanded && tick > chars.Length * 7 + 45 + 30) tick = 0;
     }
 
-    // 下落 + 衰减弹跳：p∈[0,1]
-    static int BounceOffset(double p)
+    void ApplyFrame()
     {
-        if (p < 0.4) return (int)((1 - p / 0.4) * 60);   // 从上方 60px 落下
-        double q = (p - 0.4) / 0.6;
-        return (int)(Math.Abs(Math.Sin(q * Math.PI * 2.5)) * (1 - q) * 14);
+        for (int i = 0; i < chars.Length; i++)
+        {
+            if (chars[i].IsDisposed) return;
+            if (chars[i].Visible != shown[i]) chars[i].Visible = shown[i];
+            if (chars[i].Top != positions[i]) chars[i].Top = positions[i];
+        }
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        stopRender = true;
+        if (renderThread != null) renderThread.Join(300);
+        base.OnFormClosing(e);
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion;
+        public short dmDriverVersion;
+        public short dmSize;
+        public short dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX;
+        public int dmPositionY;
+        public int dmDisplayOrientation;
+        public int dmDisplayFixedOutput;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel;
+        public int dmPelsWidth;
+        public int dmPelsHeight;
+        public int dmDisplayFlags;
+        public int dmDisplayFrequency;
+        public int dmICMMethod;
+        public int dmICMIntent;
+        public int dmMediaType;
+        public int dmDitherType;
+        public int dmReserved1;
+        public int dmReserved2;
+        public int dmPanningWidth;
+        public int dmPanningHeight;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+    static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
+
+    static int GetRefreshHz()
+    {
+        try
+        {
+            DEVMODE dm = new DEVMODE();
+            dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+            if (EnumDisplaySettings(null, -1, ref dm) && dm.dmDisplayFrequency > 0)
+                return dm.dmDisplayFrequency;
+        }
+        catch { }
+        return 60;
+    }
+}
+
+// ---------------------------------------------------------------
+// 教程窗口
+// ---------------------------------------------------------------
+
+class TutorialForm : Form
+{
+    public TutorialForm()
+    {
+        Text = "使用教程";
+        Width = 780;
+        Height = 580;
+        StartPosition = FormStartPosition.CenterParent;
+        Font = new Font("Microsoft YaHei UI", 9F);
+
+        ListBox nav = new ListBox();
+        nav.Dock = DockStyle.Left;
+        nav.Width = 200;
+        nav.Font = new Font("Microsoft YaHei UI", 10F);
+        nav.BorderStyle = BorderStyle.None;
+        nav.BackColor = Color.FromArgb(245, 249, 253);
+        foreach (string t in TutorialText.Titles) nav.Items.Add(t);
+
+        TextBox body = new TextBox();
+        body.Dock = DockStyle.Fill;
+        body.Multiline = true;
+        body.ReadOnly = true;
+        body.ScrollBars = ScrollBars.Vertical;
+        body.WordWrap = true;
+        body.Font = new Font("Microsoft YaHei UI", 10F);
+        body.BackColor = Color.White;
+        body.BorderStyle = BorderStyle.None;
+
+        nav.SelectedIndexChanged += delegate
+        {
+            if (nav.SelectedIndex >= 0) body.Text = TutorialText.Contents[nav.SelectedIndex];
+        };
+        nav.SelectedIndex = 0;
+
+        Controls.Add(body);
+        Controls.Add(nav);
     }
 }
 
@@ -177,16 +413,17 @@ class MainForm : Form
     public MainForm()
     {
         Text = "芙宁娜 · 整合启动器";
-        Width = 880;
-        Height = 700;
+        Width = 900;
+        Height = 720;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(780, 620);
+        MinimumSize = new Size(800, 640);
+        Font = new Font("Microsoft YaHei UI", 9F);
 
         TableLayoutPanel root = new TableLayoutPanel();
         root.Dock = DockStyle.Top;
         root.AutoSize = true;
         root.ColumnCount = 1;
-        root.Padding = new Padding(8);
+        root.Padding = new Padding(10);
         root.Controls.Add(BuildPathsGroup(), 0, 0);
         root.Controls.Add(BuildBehaviorGroup(), 0, 1);
         root.Controls.Add(BuildRunGroup(), 0, 2);
@@ -194,17 +431,16 @@ class MainForm : Form
 
         txtLog = new TextBox();
         txtLog.Dock = DockStyle.Bottom;
-        txtLog.Height = 165;
+        txtLog.Height = 170;
         txtLog.Multiline = true;
         txtLog.ReadOnly = true;
         txtLog.ScrollBars = ScrollBars.Vertical;
-        txtLog.BackColor = Color.FromArgb(30, 30, 30);
-        txtLog.ForeColor = Color.FromArgb(200, 200, 200);
+        txtLog.BackColor = Color.FromArgb(25, 28, 36);
+        txtLog.ForeColor = Color.FromArgb(200, 205, 215);
         txtLog.Font = new Font("Consolas", 9);
         Controls.Add(txtLog);
         root.BringToFront();
 
-        // 校验防抖：输入停顿 400ms 后统一验证
         validateTimer = new System.Windows.Forms.Timer();
         validateTimer.Interval = 400;
         validateTimer.Tick += delegate { validateTimer.Stop(); ValidateAll(); };
@@ -219,7 +455,17 @@ class MainForm : Form
         ValidateAll();
 
         Furina.OnLog += OnCoreLog;
-        AppendLog("配置已载入。浏览选择你的组件路径后点「启动」。");
+
+        // 配置完整 → Splash 阶段已自动启动：界面直接呈现运行中状态
+        if (Program.AutoStarted && Program.AutoRunThread != null)
+        {
+            AttachRun(Program.AutoRunThread);
+            AppendLog("检测到完整配置，已自动启动全部组件。");
+        }
+        else
+        {
+            AppendLog("配置已载入。浏览选择你的组件路径后点「启动」。");
+        }
     }
 
     // ---------------------------------------------------------------
@@ -232,12 +478,13 @@ class MainForm : Form
         grp.Text = "组件路径（除 AIRI 外均有默认值；NewAPI 留空 = 不使用网关）";
         grp.AutoSize = true;
         grp.Dock = DockStyle.Top;
+        grp.Padding = new Padding(8, 4, 8, 8);
 
         TableLayoutPanel grid = new TableLayoutPanel();
         grid.Dock = DockStyle.Top;
         grid.AutoSize = true;
         grid.ColumnCount = 4;
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30));
@@ -298,7 +545,6 @@ class MainForm : Form
         chkKeep = new CheckBox();
         chkKeep.Text = "退出时保留服务运行";
         chkKeep.AutoSize = true;
-        // 互斥：勾选其一即取消另一个
         chkAutoExit.CheckedChanged += delegate
         {
             if (chkAutoExit.Checked && chkKeep.Checked) chkKeep.Checked = false;
@@ -335,22 +581,20 @@ class MainForm : Form
         flow.AutoSize = true;
         flow.WrapContents = false;
 
-        Button btnSave = new Button();
-        btnSave.Text = "保存配置";
+        Button btnSave = FlatButton("保存配置", Color.FromArgb(235, 240, 248));
         btnSave.Click += delegate { FieldsToCfg(); Furina.SaveIni(); Furina.Log("配置已保存到 furina.ini"); };
-        btnStart = new Button();
-        btnStart.Text = "▶ 启动";
-        btnStart.BackColor = Color.FromArgb(198, 239, 206);
+        btnStart = FlatButton("▶ 启动", Color.FromArgb(198, 239, 206));
         btnStart.Click += delegate { StartRun(); };
-        btnStop = new Button();
-        btnStop.Text = "■ 停止（回收服务）";
+        btnStop = FlatButton("■ 停止（回收服务）", Color.FromArgb(255, 199, 206));
         btnStop.Enabled = false;
-        btnStop.BackColor = Color.FromArgb(255, 199, 206);
         btnStop.Click += delegate { Furina.RequestStop(); };
+        Button btnTutorial = FlatButton("? 教程", Color.FromArgb(255, 235, 180));
+        btnTutorial.Click += delegate { new TutorialForm().Show(this); };
 
         flow.Controls.Add(btnSave);
         flow.Controls.Add(btnStart);
         flow.Controls.Add(btnStop);
+        flow.Controls.Add(btnTutorial);
         flow.Controls.Add(MakeStatusLabel("NewAPI", out lblStNewApi));
         flow.Controls.Add(MakeStatusLabel("SoVITS", out lblStSoVits));
         flow.Controls.Add(MakeStatusLabel("适配器", out lblStAdapter));
@@ -359,13 +603,26 @@ class MainForm : Form
         return grp;
     }
 
+    static Button FlatButton(string text, Color back)
+    {
+        Button b = new Button();
+        b.Text = text;
+        b.BackColor = back;
+        b.FlatStyle = FlatStyle.Flat;
+        b.FlatAppearance.BorderColor = Color.FromArgb(190, 200, 215);
+        b.Margin = new Padding(3, 4, 3, 4);
+        b.AutoSize = true;
+        b.Padding = new Padding(6, 2, 6, 2);
+        return b;
+    }
+
     Control MakeStatusLabel(string name, out Label lbl)
     {
         lbl = new Label();
         lbl.Text = name + ": --";
         lbl.AutoSize = true;
         lbl.Padding = new Padding(6, 3, 6, 3);
-        lbl.Margin = new Padding(8, 6, 0, 3);
+        lbl.Margin = new Padding(8, 7, 0, 3);
         lbl.BackColor = Color.LightGray;
         return lbl;
     }
@@ -378,25 +635,20 @@ class MainForm : Form
         lbl.Text = label;
         lbl.AutoSize = true;
         lbl.Anchor = AnchorStyles.Left;
-        lbl.Padding = new Padding(4, 6, 0, 0);
+        lbl.Padding = new Padding(4, 7, 0, 0);
         grid.Controls.Add(lbl, 0, row);
 
         TextBox tb = new TextBox();
         tb.Dock = DockStyle.Fill;
+        tb.Margin = new Padding(3, 4, 3, 4);
         grid.Controls.Add(tb, 1, row);
 
         if (btnText != null)
         {
-            Button btn = new Button();
-            btn.Text = btnText;
+            Button btn = FlatButton(btnText, Color.FromArgb(240, 244, 250));
             btn.Dock = DockStyle.Fill;
             btn.Click += onBrowse;
             grid.Controls.Add(btn, 2, row);
-        }
-        else
-        {
-            Label filler = new Label();
-            grid.Controls.Add(filler, 2, row);
         }
 
         mark = new Label();
@@ -451,7 +703,6 @@ class MainForm : Form
 
     void ValidateAll()
     {
-        // AIRI：存在且文件名必须是 airi.exe
         string airi = txtAiri.Text.Trim();
         if (airi.Length == 0) SetMark(markAiri, null, "");
         else if (!File.Exists(airi)) SetMark(markAiri, false, "文件不存在：" + airi);
@@ -459,7 +710,6 @@ class MainForm : Form
             SetMark(markAiri, false, "文件存在，但文件名不是 airi.exe，请确认选对了 AIRI 主程序");
         else SetMark(markAiri, true, "AIRI 主程序（静态校验通过；是否运行中见下方状态灯）");
 
-        // TTS 启动脚本：存在 + 可执行扩展名
         string tts = txtTtsBat.Text.Trim();
         string[] runExts = { ".bat", ".cmd", ".exe", ".ps1", ".vbs" };
         if (tts.Length == 0) SetMark(markTts, null, "");
@@ -468,7 +718,6 @@ class MainForm : Form
             SetMark(markTts, false, "不是可执行的启动脚本（.bat/.cmd/.exe/.ps1/.vbs）");
         else SetMark(markTts, true, "脚本存在（静态校验；能否正常拉起以启动后的状态灯为准）");
 
-        // NewAPI 程序：可空；通过校验才解锁网关相关三项
         string napi = txtNewApiExe.Text.Trim();
         bool napiOk = false;
         if (napi.Length == 0) SetMark(markNewApi, null, "未配置 = 不使用网关");
@@ -477,7 +726,7 @@ class MainForm : Form
             SetMark(markNewApi, false, "NewAPI 单文件版应为 .exe");
         else { SetMark(markNewApi, true, "NewAPI 主程序"); napiOk = true; }
 
-        bool gatewayOn = napiOk; // 已验证才允许填写
+        bool gatewayOn = napiOk;
         txtNewApiDir.Enabled = gatewayOn;
         txtNewApiProbe.Enabled = gatewayOn;
         txtSession.Enabled = gatewayOn;
@@ -551,34 +800,30 @@ class MainForm : Form
         FieldsToCfg();
         Furina.SaveIni();
         Furina.ResetState();
-        btnStart.Enabled = false;
-        btnStop.Enabled = true;
-        runThread = new Thread(RunWorker);
-        runThread.IsBackground = true;
-        runThread.Start();
+        Thread t = new Thread(Program.CoreRunWorker);
+        t.IsBackground = true;
+        t.Start();
+        AttachRun(t);
     }
 
-    void RunWorker()
+    // 进入运行中状态：禁用启动键、挂监控线程，运行体自然结束（如 AIRI 关闭）后恢复按钮
+    void AttachRun(Thread t)
     {
-        try
+        runThread = t;
+        btnStart.Enabled = false;
+        btnStop.Enabled = true;
+        Thread watcher = new Thread(delegate ()
         {
-            Furina.RunAll();
-            Furina.WatchdogLoop(0);
-        }
-        catch (Exception e)
-        {
-            Furina.Log("运行异常: " + e);
-        }
-        finally
-        {
-            Furina.Teardown();
+            t.Join();
             Ui(delegate
             {
                 btnStart.Enabled = true;
                 btnStop.Enabled = false;
                 AppendLog("已停止。可以修改配置后重新启动。");
             });
-        }
+        });
+        watcher.IsBackground = true;
+        watcher.Start();
     }
 
     // ---------------------------------------------------------------

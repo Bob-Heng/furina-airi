@@ -540,6 +540,7 @@ public class Furina
         WaitForProbe(cfg.SoVitsProbe, cfg.TtsWarmupGraceSec, "SoVITS（模型加载约需 1 分钟）");
         WaitForProbe(cfg.AdapterProbe, 30, "TTS 适配器");
         EnsureAiri();
+        Log("初始化完成。");
     }
 
     public static void RequestStop()
@@ -679,7 +680,7 @@ public class Furina
         RunAll();
 
         int exitAfter = ParseExitAfter(args);
-        Log("初始化完成。按 Q 退出" + (exitAfter > 0 ? ("；" + exitAfter + " 秒后自动退出(测试模式)") : "") + "。");
+        Log("按 Q 退出" + (exitAfter > 0 ? ("；" + exitAfter + " 秒后自动退出(测试模式)") : "") + "。");
 
         WatchdogLoop(exitAfter);
         Teardown();
