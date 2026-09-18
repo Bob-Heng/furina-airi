@@ -213,9 +213,46 @@ public class Furina
 
     enum ProbeResult { Alive, Refused, Timeout }
 
+    // 统一组件状态：Alive=有响应；Busy=超时但进程CPU有占用（在忙）；Dead=拒绝连接；
+    // Stalled=超时且进程CPU精确为0（卡死）。只有 Dead/Stalled 才需要重拉。
+    public enum ComponentState { Alive, Busy, Dead, Stalled }
+
     public static bool Probe(string url)
     {
         return ProbeDetailed(url) == ProbeResult.Alive;
+    }
+
+    // 统一探活入口：先问 HTTP；超时时再查端口监听进程的 CPU 精确值做最终判定
+    public static ComponentState ProbeComponent(string url)
+    {
+        ProbeResult r = ProbeDetailed(url);
+        if (r == ProbeResult.Alive) return ComponentState.Alive;
+        if (r == ProbeResult.Refused) return ComponentState.Dead;
+        int port = 0;
+        try { port = new Uri(url).Port; } catch { }
+        int pid = port > 0 ? FirstPidByPort(port) : 0;
+        if (pid <= 0) return ComponentState.Dead;   // 超时且无监听者 = 死了
+        return ProcessCpuIsExactlyZero(pid) ? ComponentState.Stalled : ComponentState.Busy;
+    }
+
+    static int FirstPidByPort(int port)
+    {
+        foreach (int pid in FindPidsByPort(port)) return pid;
+        return 0;
+    }
+
+    // 在 300ms 测量窗口内进程未获得任何 CPU 时间片 = 精确的 0（卡死信号）
+    static bool ProcessCpuIsExactlyZero(int pid)
+    {
+        try
+        {
+            Process p = Process.GetProcessById(pid);
+            TimeSpan t1 = p.TotalProcessorTime;
+            Thread.Sleep(300);
+            p.Refresh();
+            return p.TotalProcessorTime == t1;
+        }
+        catch { return false; }  // 进程刚好退出 → 本轮不算卡死，下轮探活自然判 Dead
     }
 
     // 区分"拒绝连接"（进程死了，可安全重拉）与"超时"（服务在忙合成，绝不能误杀）
@@ -640,10 +677,10 @@ public class Furina
             {
                 // 只有"组件曾就绪过"或"加载宽限已过"才累计失败次数
                 bool graceOver = (DateTime.Now - ttsLastStart).TotalSeconds > cfg.TtsWarmupGraceSec;
-                ProbeResult rs = ProbeDetailed(cfg.SoVitsProbe);
-                ProbeResult ra = ProbeDetailed(cfg.AdapterProbe);
+                ComponentState cs = ProbeComponent(cfg.SoVitsProbe);
+                ComponentState ca = ProbeComponent(cfg.AdapterProbe);
 
-                if (rs == ProbeResult.Alive)
+                if (cs == ComponentState.Alive || cs == ComponentState.Busy)
                 {
                     if (!sovitsEverReady)
                     {
@@ -652,11 +689,16 @@ public class Furina
                         Log("语音服务首次就绪，进程优先级恢复 Normal");
                     }
                     sovitsFails = 0;
+                    if (cs == ComponentState.Busy) LogBusyOnce("语音服务");
                 }
-                else if (rs == ProbeResult.Refused && (sovitsEverReady || graceOver)) sovitsFails++;
-                else if (rs == ProbeResult.Timeout) LogBusyOnce("语音服务");
+                else if (sovitsEverReady || graceOver)
+                {
+                    sovitsFails++;
+                    if (cs == ComponentState.Stalled)
+                        Log("语音服务探活超时且 CPU 精确为 0，判定为卡死");
+                }
 
-                if (ra == ProbeResult.Alive)
+                if (ca == ComponentState.Alive || ca == ComponentState.Busy)
                 {
                     if (!adapterEverReady)
                     {
@@ -664,9 +706,14 @@ public class Furina
                         SetPriorityByPort(9881, ProcessPriorityClass.Normal);
                     }
                     adapterFails = 0;
+                    if (ca == ComponentState.Busy) LogBusyOnce("语音适配器");
                 }
-                else if (ra == ProbeResult.Refused && (adapterEverReady || graceOver)) adapterFails++;
-                else if (ra == ProbeResult.Timeout) LogBusyOnce("语音适配器");
+                else if (adapterEverReady || graceOver)
+                {
+                    adapterFails++;
+                    if (ca == ComponentState.Stalled)
+                        Log("语音适配器探活超时且 CPU 精确为 0，判定为卡死");
+                }
 
                 if (sovitsFails >= 2 || adapterFails >= 2)
                 {
@@ -685,14 +732,16 @@ public class Furina
 
                 if (NewApiEnabled)
                 {
-                    if (Probe(cfg.NewApiProbe))
+                    ComponentState cn = ProbeComponent(cfg.NewApiProbe);
+                    if (cn == ComponentState.Alive || cn == ComponentState.Busy)
                     {
                         newapiFails = 0;
                     }
                     else
                     {
                         newapiFails++;
-                        Log("NewAPI 探活失败 #" + newapiFails);
+                        Log("NewAPI 探活失败 #" + newapiFails
+                            + (cn == ComponentState.Stalled ? "（超时且 CPU 为 0，卡死）" : "（拒绝连接）"));
                         if (newapiFails >= cfg.FailRestartThreshold)
                         {
                             newapiFails = 0;

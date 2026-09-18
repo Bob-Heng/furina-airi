@@ -839,8 +839,7 @@ class MainForm : Form
                 Tuple<string, bool?> stNewApi, stSoVits, stAdapter, stAiri;
                 if (Furina.NewApiEnabled)
                 {
-                    bool ok = Furina.Probe(Furina.cfg.NewApiProbe);
-                    stNewApi = new Tuple<string, bool?>(ok ? "运行中" : "未响应", ok);
+                    stNewApi = ProbeStatus(Furina.cfg.NewApiProbe);
                 }
                 else stNewApi = new Tuple<string, bool?>("未启用", null);
 
@@ -867,8 +866,11 @@ class MainForm : Form
     static Tuple<string, bool?> ProbeStatus(string url)
     {
         if (string.IsNullOrEmpty(url)) return new Tuple<string, bool?>("未配置", null);
-        bool ok = Furina.Probe(url);
-        return new Tuple<string, bool?>(ok ? "运行中" : "未响应", ok);
+        // 统一规则：Alive/Busy 都视为正常显示"运行中"；只有 Dead/Stalled 显示未响应
+        Furina.ComponentState st = Furina.ProbeComponent(url);
+        if (st == Furina.ComponentState.Alive || st == Furina.ComponentState.Busy)
+            return new Tuple<string, bool?>("运行中", true);
+        return new Tuple<string, bool?>("未响应", false);
     }
 
     void SetStatus(Label lbl, Tuple<string, bool?> st)
