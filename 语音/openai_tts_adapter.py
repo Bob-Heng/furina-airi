@@ -140,6 +140,40 @@ _last_mood = 'calm'
 _last_time = 0.0
 
 
+# ACT 情绪分段表：LLM 守卫（llm_guard.py）解析 ACT token 后写入，
+# 实现"语音与动作情绪同源"——LLM 自报情绪优先于本地信号词猜测。
+_ACT_MOOD_MAP_FILE = os.path.join(BASE_DIR, 'act_mood_map.json')
+
+
+def _strip_for_match(s):
+    return re.sub(r'[^0-9A-Za-z一-鿿]', '', s or '')
+
+
+def _load_act_mood(text):
+    """查 ACT 情绪分段表，返回输入句子所属段的情绪池（soft/calm/bright）。
+
+    位置对应：守卫按 ACT 分界保留原文顺序的正文段；这里对输入句子做
+    去标点子串匹配。表超过 10 分钟未更新视为陈旧放弃，走原信号词逻辑。
+    """
+    try:
+        with open(_ACT_MOOD_MAP_FILE, encoding='utf-8') as f:
+            data = json.load(f)
+        upd = data.get('updated', '')
+        if upd:
+            age = time.time() - time.mktime(time.strptime(upd, '%Y-%m-%d %H:%M:%S'))
+            if age > 600:
+                return None
+        key = _strip_for_match(text)
+        if not key:
+            return None
+        for seg in data.get('segments', []):
+            if key in _strip_for_match(seg.get('text', '')):
+                return seg.get('mood')
+    except Exception:
+        return None
+    return None
+
+
 def _infer_mood(text):
     """返回 (mood, bright_score)。只识别有把握的信号，拿不准就 calm。"""
     bright_score = text.count('！') + text.count('!')
@@ -163,6 +197,11 @@ def _pick_ref(text):
     # 向 soft 方向的跳变本身就需要明确的低落信号词才能触发，无需额外钳制。
     if mood == 'bright' and _last_mood == 'soft' and bright_score < POLE_JUMP_MIN_SIGNALS:
         mood = 'calm'
+
+    # LLM 自报情绪（守卫解析的 ACT token，与动作同源）优先于信号词猜测
+    act_mood = _load_act_mood(text)
+    if act_mood is not None:
+        mood = act_mood
 
     # 超短句（≤5 字）：soft/bright 组的参考音多为气声、慵懒腔，短文本极易塌成
     # 一口呼吸声。直接改用吐字最清晰的 calm 组第一条，且不扰动粘性状态。
@@ -198,6 +237,99 @@ def _clean_text(text):
     text = re.sub(r'[，、；：]\s*([？！])', r'\1', text)  # '，？' → '？' 一类断句残留
     text = re.sub(r'—+\s*$', '', text)  # 句尾孤悬的破折号是断句碎片，会让模型拖出气息声
     text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+# ---------------- 文本归一化：数字与英文 → 中文读音 ----------------
+# 送给 SoVITS 的每个字都是中文，保证芙宁娜音色；代价是英文为中式读法
+# （中文声线模型的固有限度），听感上契合角色说外语的语境。
+_CN_DIGITS = '零一二三四五六七八九'
+
+_LETTER_READINGS = {
+    'a': '诶', 'b': '毕', 'c': '西', 'd': '迪', 'e': '伊', 'f': '埃弗', 'g': '吉',
+    'h': '艾尺', 'i': '爱', 'j': '杰', 'k': '凯', 'l': '埃勒', 'm': '埃姆', 'n': '恩',
+    'o': '欧', 'p': '屁', 'q': '扣', 'r': '阿尔', 's': '埃斯', 't': '提', 'u': '优',
+    'v': '维', 'w': '达不溜', 'x': '埃克斯', 'y': '歪', 'z': '贼',
+}
+
+_EN_DICT = {
+    'ok': '欧凯', 'hp': '艾尺屁', 'mp': '埃姆屁', 'ai': '诶爱', 'cpu': '西屁优',
+    'gpu': '吉屁优', 'app': '诶屁屁', 'wifi': '歪坏', 'id': '埃迪', 'ip': '埃屁',
+    'url': '优阿尔艾勒', 'api': '诶屁爱', 'tts': '提提埃斯', 'gpt': '吉屁提',
+    'gdp': '吉迪屁', 'fps': '埃弗屁埃斯', 'rmb': '阿尔埃姆毕', 'ssr': '埃斯埃斯阿尔',
+    'ur': '优阿尔', 'pv': '屁维', 'up': '优屁', 'cv': '西维', 'cos': '扣斯',
+    'www': '达不溜达不溜达不溜', 'com': '扣姆', 'org': '欧阿尔吉', 'vs': '维埃斯',
+    'lv': '埃勒维', 'cd': '西迪', 'xp': '埃克斯屁', 'dl': '迪埃勒', 'afk': '诶埃弗凯',
+    'mmd': '埃姆埃姆迪',
+}
+
+_NUM_RE = re.compile(r'\d+(?:\.\d+)?')
+_EN_RE = re.compile(r'[A-Za-z]+')
+
+
+def _four_digits(x):
+    """<10000 的段转中文读法，带零压缩（1002→一千零二，1050→一千零五十）。"""
+    parts = []
+    zero = False
+    for unit, name in ((1000, '千'), (100, '百'), (10, '十')):
+        d = x // unit
+        x %= unit
+        if d:
+            if zero and parts:
+                parts.append('零')
+            zero = False
+            if unit == 10 and d == 1 and not parts:
+                parts.append('十')  # 12→十二 而非 一十二
+            else:
+                parts.append(_CN_DIGITS[d] + name)
+        elif parts:
+            zero = True
+    if x:
+        if zero and parts:
+            parts.append('零')
+        parts.append(_CN_DIGITS[x])
+    return ''.join(parts)
+
+
+def _int_to_cn(n):
+    if n == 0:
+        return '零'
+    if n < 0:
+        return '负' + _int_to_cn(-n)
+    if n < 10000:
+        return _four_digits(n)
+    if n < 10 ** 8:
+        hi, lo = divmod(n, 10000)
+        s = _four_digits(hi) + '万'
+        if lo:
+            s += ('零' if lo < 1000 else '') + _four_digits(lo)
+        return s
+    hi, lo = divmod(n, 10 ** 8)
+    s = _four_digits(hi) + '亿'
+    if lo:
+        s += ('零' if lo < 10 ** 7 else '') + _int_to_cn(lo)
+    return s
+
+
+def _normalize_text(text):
+    """阿拉伯数字→中文读法；英文单词→内置音译词典，未命中逐字母读音。"""
+    def num_repl(m):
+        s = m.group(0)
+        if '.' in s:
+            a, b = s.split('.')
+            return _int_to_cn(int(a)) + '点' + ''.join(_CN_DIGITS[int(d)] for d in b)
+        return _int_to_cn(int(s))
+
+    def en_repl(m):
+        w = m.group(0).lower()
+        if w in _EN_DICT:
+            return _EN_DICT[w]
+        if len(w) == 1:
+            return _LETTER_READINGS.get(w, m.group(0))
+        return ''.join(_LETTER_READINGS.get(c, '') for c in w) or m.group(0)
+
+    text = _NUM_RE.sub(num_repl, text)
+    text = _EN_RE.sub(en_repl, text)
     return text
 
 
@@ -367,6 +499,8 @@ class H(BaseHTTPRequestHandler):
                     _hanzi_count(text), text[:30]))
                 self._send_json(400, {'error': 'input too long (max 500 chars per request)'})
                 return
+            # 归一化：数字/英文 → 中文读音，保证芙宁娜音色（见 _normalize_text）
+            text = _normalize_text(text)
             # 纯标点/语气残留不值得合成——SoVITS 会把它变成莫名其妙的语气词
             if not re.search(r'[一-鿿A-Za-z0-9]', text):
                 _log('skip(punct-only): %r -> 0.3s silence' % text)

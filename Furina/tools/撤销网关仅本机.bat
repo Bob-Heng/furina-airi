@@ -1,12 +1,11 @@
 @echo off
-rem æ’¤é”€ã€Œé”å®šç½‘å…³ä¸ºä»…æœ¬æœºè®¿é—®.batã€æ·»åŠ çš„é˜²ç«å¢™è§„åˆ™ï¼ˆåŒæ ·éœ€ç®¡ç†å‘˜è¿è¡Œï¼‰
-chcp 65001 >nul
+rem ³·Ïú¡¸Ëø¶¨Íø¹ØÎª½ö±¾»ú·ÃÎÊ.bat¡¹Ìí¼ÓµÄ·À»ğÇ½¹æÔò£¨Í¬ÑùĞè¹ÜÀíÔ±ÔËĞĞ£©
 net session >nul 2>&1
 if errorlevel 1 (
-    echo [å¤±è´¥] éœ€è¦ç®¡ç†å‘˜æƒé™ï¼šè¯·å³é”®æœ¬æ–‡ä»¶ â†’ ä»¥ç®¡ç†å‘˜èº«ä»½è¿è¡Œ
+    echo [Ê§°Ü] ĞèÒª¹ÜÀíÔ±È¨ÏŞ£ºÇëÓÒ¼ü±¾ÎÄ¼ş ¡ú ÒÔ¹ÜÀíÔ±Éí·İÔËĞĞ
     pause
     exit /b 1
 )
 netsh advfirewall firewall delete rule name="furina-newapi-localonly"
-if errorlevel 1 (echo [æç¤º] è§„åˆ™ä¸å­˜åœ¨æˆ–å·²åˆ é™¤) else (echo [OK] å·²æ’¤é”€)
+if errorlevel 1 (echo [ÌáÊ¾] ¹æÔò²»´æÔÚ»òÒÑÉ¾³ı) else (echo [OK] ÒÑ³·Ïú)
 pause

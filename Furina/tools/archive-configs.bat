@@ -1,12 +1,11 @@
 @echo off
 rem ============================================================
-rem  archive-configs.bat - æŠŠåˆ†æ•£åœ¨æœ¬æœºå„å¤„çš„æ´»é…ç½®å½’æ¡£è¿› Furina\configs\
-rem  è¯´æ˜Žï¼šè¿™äº›æ˜¯"å‰¯æœ¬"å½’æ¡£ï¼Œåº”ç”¨ä»åœ¨è¯»å„è‡ªçš„åŽŸä½ç½®ã€‚
-rem  å®žæµ‹ç»“è®ºï¼ˆ2026-09-18ï¼‰ï¼šæ¸ é“/TTS/æƒ…ç»ªæ˜ å°„çš„æ´»é…ç½®åœ¨ Local Storage\leveldbï¼Œ
-rem  ä¸åœ¨ app-config.jsonï¼ˆåŽè€…åªæœ‰çª—å£ä½ç½®ï¼‰â€”â€”ä¸¤ä¸ªéƒ½å½’æ¡£ã€‚
+rem  archive-configs.bat - °Ñ·ÖÉ¢ÔÚ±¾»ú¸÷´¦µÄ»îÅäÖÃ¹éµµ½ø Furina\configs\
+rem  ËµÃ÷£ºÕâÐ©ÊÇ"¸±±¾"¹éµµ£¬Ó¦ÓÃÈÔÔÚ¶Á¸÷×ÔµÄÔ­Î»ÖÃ¡£
+rem  Êµ²â½áÂÛ£¨2026-09-18£©£ºÇþµÀ/TTS/ÇéÐ÷Ó³ÉäµÄ»îÅäÖÃÔÚ Local Storage\leveldb£¬
+rem  ²»ÔÚ app-config.json£¨ºóÕßÖ»ÓÐ´°¿ÚÎ»ÖÃ£©¡ª¡ªÁ½¸ö¶¼¹éµµ¡£
 rem ============================================================
-chcp 65001 >nul
-rem æœ¬ bat åœ¨ Furina\tools\ ä¸‹ï¼Œé¡¹ç›®æ ¹ = ä¸Šä¸¤çº§
+rem ±¾ bat ÔÚ Furina\tools\ ÏÂ£¬ÏîÄ¿¸ù = ÉÏÁ½¼¶
 set "FURINA=%~dp0.."
 set "AI=%APPDATA%\ai.moeru.airi"
 
@@ -14,13 +13,13 @@ if not exist "%FURINA%\configs\airi" md "%FURINA%\configs\airi"
 
 for %%F in (app-config.json app-options.json server-channel-config.json artistry-options.json mcp.json Preferences) do (
     copy /y "%AI%\%%F" "%FURINA%\configs\airi\" >nul 2>&1
-    if errorlevel 1 (echo [WARN] %%F å½’æ¡£å¤±è´¥ï¼‰ else (echo [OK] %%F)
+    if errorlevel 1 (echo [WARN] %%F ¹éµµÊ§°Ü£© else (echo [OK] %%F)
 )
 
 robocopy "%AI%\Local Storage" "%FURINA%\configs\airi\Local Storage" /MIR /NFL /NDL /NJH /NJS >nul
-if errorlevel 8 (echo [WARN] Local Storage å½’æ¡£å¤±è´¥ï¼‰ else (echo [OK] Local Storage ^(leveldbï¼Œæ¸ é“/TTSé…ç½®æœ¬ä½“^))
+if errorlevel 8 (echo [WARN] Local Storage ¹éµµÊ§°Ü£© else (echo [OK] Local Storage ^(leveldb£¬ÇþµÀ/TTSÅäÖÃ±¾Ìå^))
 
 echo.
-echo æç¤ºï¼šone-api.db ç”± furina.exe æ¯æ¬¡å¯åŠ¨æ—¶è‡ªåŠ¨å¤‡ä»½åˆ° configs\newapi\ï¼ˆä¿ç•™æœ€è¿‘ 10 ä»½ï¼‰
-echo æœªå½’æ¡£ï¼šIndexedDB / File Systemï¼ˆèŠå¤©æ•°æ®ä¸Žç¼“å­˜ï¼Œä½“ç§¯å¤§ï¼Œé‡å»ºåŽå¯å†ç”Ÿæˆï¼‰
+echo ÌáÊ¾£ºone-api.db ÓÉ furina.exe Ã¿´ÎÆô¶¯Ê±×Ô¶¯±¸·Ýµ½ configs\newapi\£¨±£Áô×î½ü 10 ·Ý£©
+echo Î´¹éµµ£ºIndexedDB / File System£¨ÁÄÌìÊý¾ÝÓë»º´æ£¬Ìå»ý´ó£¬ÖØ½¨ºó¿ÉÔÙÉú³É£©
 pause

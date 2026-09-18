@@ -13,6 +13,7 @@
 """
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -37,6 +38,70 @@ MAX_CHARS = int(_arg('--max-chars', '1000'))
 
 CORRECTION = ('你的上一段回复超过了长度限制（%d字）。请在完全保持角色人格与语气的前提下，'
               '把同样的意思压缩到%d字以内重新输出整段回复，只输出正文，不要解释、不要分段标题。')
+
+# ---------------- ACT 情绪分段：LLM 自报情绪 → 语音适配器 ----------------
+# 角色卡的 ACT token（如 <|ACT emotion="happy"|>）标记其后正文段的情绪，
+# AIRI 用它驱动动作；这里把"段落-情绪"对应关系写下来，适配器按句查表选参考音，
+# 实现语音与动作的情绪同源。段边界 = ACT token 出现的位置（与原文顺序一致）。
+_STAGE_RE = re.compile(r'<\|.*?\|>', re.DOTALL)
+_ACT_RE = re.compile(r'<\|\s*ACT\b', re.IGNORECASE)
+_EMOTION_RE = re.compile(r'emotion\s*=\s*"?([A-Za-z_]+)"?', re.IGNORECASE)
+
+# AIRI 动作系统的 emotion 名 → 适配器参考音池（soft/calm/bright）
+_EMOTION_POOL = {
+    'soft': {'sad', 'tearful', 'gloomy', 'depressed', 'lonely', 'cry', 'upset',
+             'melancholy', 'tired', 'sleepy', 'down', 'hurt', 'anxious'},
+    'bright': {'happy', 'joyful', 'excited', 'proud', 'delighted', 'cheerful',
+               'playful', 'amused', 'laughing', 'smug', 'eager', 'thrilled'},
+}
+
+
+def _pool_of(emotion):
+    e = (emotion or '').lower()
+    for pool, names in _EMOTION_POOL.items():
+        if e in names:
+            return pool
+    return 'calm'
+
+
+MOOD_MAP_FILE = os.path.join(BASE_DIR, '语音', 'act_mood_map.json')
+
+
+def _parse_act_segments(content):
+    """剥离全部舞台指令得正文；按 ACT 分界得到 [{mood, text}] 段（原文顺序）。"""
+    segments = []
+    plain_parts = []
+    cur_emotion = None
+    pos = 0
+    for m in _STAGE_RE.finditer(content):
+        seg = content[pos:m.start()]
+        if _ACT_RE.match(m.group(0)):
+            if seg.strip():
+                segments.append({'mood': _pool_of(cur_emotion), 'text': seg.strip()})
+                plain_parts.append(seg)
+            em = _EMOTION_RE.search(m.group(0))
+            cur_emotion = em.group(1) if em else None
+        else:
+            # DELAY/CALL 等非 ACT 舞台指令：从正文丢弃，但不切开情绪段
+            plain_parts.append(seg)
+        pos = m.end()
+    tail = content[pos:]
+    if tail.strip():
+        segments.append({'mood': _pool_of(cur_emotion), 'text': tail.strip()})
+        plain_parts.append(tail)
+    return ''.join(plain_parts), segments
+
+
+def _write_mood_map(segments):
+    try:
+        tmp = MOOD_MAP_FILE + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'updated': time.strftime('%Y-%m-%d %H:%M:%S'),
+                       'segments': segments[-40:]},  # 只留最近 40 段，防膨胀
+                      f, ensure_ascii=False)
+        os.replace(tmp, MOOD_MAP_FILE)
+    except Exception as e:
+        _log('mood map write failed: %s' % e)
 
 
 def _log(msg):
@@ -172,8 +237,11 @@ class H(BaseHTTPRequestHandler):
             temperature = req.get('temperature')
 
             content = _upstream_chat(messages, model, temperature)
-            n = _char_count(content)
-            _log('chat %d chars (limit %d) model=%s' % (n, MAX_CHARS, model))
+            # 字数上限只算"最终显示给用户的正文"：ACT/DELAY 等舞台指令不计入
+            plain, segments = _parse_act_segments(content)
+            n = _char_count(plain)
+            _log('chat %d chars (limit %d) model=%s act=%d' % (
+                n, MAX_CHARS, model, len(segments)))
 
             if n > MAX_CHARS:
                 _log('over limit -> regenerate with correction')
@@ -182,11 +250,17 @@ class H(BaseHTTPRequestHandler):
                     {'role': 'user', 'content': CORRECTION % (MAX_CHARS, MAX_CHARS)},
                 ]
                 content = _upstream_chat(fix, model, temperature)
-                n2 = _char_count(content)
+                plain, segments = _parse_act_segments(content)
+                n2 = _char_count(plain)
                 _log('regenerated: %d chars' % n2)
                 if n2 > MAX_CHARS:
-                    content = _trim_to_limit(content, MAX_CHARS)
+                    # 二次超限：截断正文但保留舞台指令格式由模型负责，这里截 plain
+                    content = _trim_to_limit(plain, MAX_CHARS)
+                    segments = [{'mood': 'calm', 'text': content}]
                     _log('still over limit, trimmed to %d chars' % _char_count(content))
+
+            # 把最终版本的 ACT 情绪分段写给语音适配器（含打回重生成的版本）
+            _write_mood_map(segments)
 
             if want_stream:
                 self._send(200, _repack_sse(content, model).encode('utf-8'),
