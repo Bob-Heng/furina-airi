@@ -1,134 +1,147 @@
 // -*- coding: utf-8 -*-
 /*
- * tutorial_text.cs - 教程文本（面向没有任何编程知识的二次元爱好者）
- * 改教程只需编辑本文件，build.bat 重编译后生效。
+ * tutorial_text.cs - 教程文本（Markdown 格式）+ 极简 Markdown 渲染器
+ *
+ * 支持的语法（刻意保持极简，零依赖）：
+ *   # 章标题      大号加粗深蓝
+ *   ## 节标题     中号加粗
+ *   其余          正文（空行分段）
+ * 改教程只需编辑 Contents，build.bat 重编译后生效。
  */
+using System.Text;
+
 static class TutorialText
 {
     public static readonly string[] Titles = {
         "第一章 · AIRI 配置",
-        "第二章 · TTS 配置",
-        "第三章 · 适配器配置",
+        "第二章 · 语音服务配置",
+        "第三章 · 语音适配器配置",
         "第四章 · NewAPI 网关配置（可选）",
     };
 
-    public static readonly string[] Contents = {
+    // 四章按顺序连贯渲染为一份可滚动的文档
+    public static readonly string FullMarkdown =
+@"# 第一章 · AIRI 配置
+AIRI 是桌面宠物本体：显示模型、播放动作、提供聊天界面。
 
-// ==================== 第一章 ====================
-@"【第一章 · AIRI 配置】
+## 1.1 模型
+1. 浏览器打开 modao.cc，搜索“芙宁娜”，下载 MMD 模型包（.zip）。
+2. AIRI → 设置 → Models → Import → 选择该 zip。
 
-AIRI 是桌面宠物的“身体”——她长什么样、摆什么动作、显示在哪，都在这里配。
+## 1.2 角色卡
+1. 从本仓库「角色卡源文件」下载 card.json 与 manifest.json。
+2. 全选两个文件 → 右键 → 发送到 → 压缩文件夹，得到 zip。
+3. AIRI → 设置 → 角色卡 → 导入该 zip → 新开一个会话生效。
 
-一、模型下载（她长什么样）
-1. 浏览器打开「模之屋」网站（modao.cc），搜索“芙宁娜”。
-2. 挑一个喜欢的 MMD 模型包（.zip）下载下来。
-3. 打开 AIRI → 设置 → Models → Import，选中刚下载的 zip 导入。
-4. 白芙黑芙都可以；项目作者在用黑芙（荒形态）。
+## 1.3 动作
+1. 模之屋下载 .vmd 动作文件。
+2. AIRI → 动作管理 → 导入。
+3. 在「情绪动作映射」中绑定到情绪；数量宁少勿多。
 
-二、角色卡下载（她的灵魂）
-1. 打开本项目的 GitHub 仓库，找到「角色卡源文件」文件夹。
-2. 里面有两个文件：card.json（卡的正文）和 manifest.json（格式说明）。
-3. 把这两个文件一起压缩成 zip：全选 → 右键 → 发送到 → 压缩文件夹。
-4. AIRI → 设置 → 角色卡 → 导入这个 zip，然后【新开一个会话】生效。
-   小提示：旧会话有“语气惯性”，新卡只在会话开头生效，所以记得新开会话。
+## 1.4 大模型 API
+1. AIRI → 意识模块 → 选择 OpenAI 兼容。
+2. 不用网关：地址 https://api.deepseek.com/v1，密钥填 deepseek.com 后台创建的 sk- 密钥，模型 deepseek-chat。
+3. 使用网关（见第四章）：地址 http://127.0.0.1:3000/v1，密钥填网关令牌。
 
-三、动作下载（她会动）
-1. 同样在模之屋搜索 VMD 格式的动作文件下载。
-2. AIRI → 动作管理 → 导入下载好的 .vmd 文件。
-3. 在「情绪动作映射」里把动作绑到情绪上（比如 happy → 开心动作）。
-   建议宁少勿多：待机呼吸 + 4~5 个情绪动作就很生动了。
+## 1.5 语音
+TTS 选择 OpenAI 兼容：地址 http://127.0.0.1:9881/v1，模型 gpt-sovits-tts，密钥任意填写。
 
-四、API 配置（她的脑子）
-1. AIRI → 设置 → 意识模块 → 选 OpenAI 兼容。
-2. 不用网关（最简单）：
-   地址填 https://api.deepseek.com/v1
-   密钥填你在 deepseek.com 后台创建的 sk- 开头密钥
-   模型填 deepseek-chat
-3. 用网关（见第四章）：
-   地址填 http://127.0.0.1:3000/v1，密钥填网关令牌。
-4. 语音：TTS 选 OpenAI 兼容，地址 http://127.0.0.1:9881/v1，模型 gpt-sovits-tts。
-",
+# 第二章 · 语音服务配置
+语音服务负责把文字合成为语音。默认方案为 GPT-SoVITS。
 
-// ==================== 第二章 ====================
-@"【第二章 · TTS 配置】
+## 2.1 语音获取
+1. 准备 3~10 秒单人干声：环境安静、无背景音乐、无混响。
+2. 来源三选一：自己录音 / 明确授权的素材 / 游戏语音（仅限个人自用，禁止配布）。
+3. 在 语音\ref_pool.json 中登记每条参考音：路径、逐字台词、情绪标签（soft/calm/bright）。台词必须逐字准确，否则明显拉低合成质量。
 
-TTS 是桌面宠物的“嗓子”——把她的话变成声音。
+## 2.2 模型选取与安装
+1. 下载 GPT-SoVITS 整合包（建议 v2ProPlus），解压到项目目录下的 GPT-SoVITS-main 文件夹。
+2. 按整合包说明安装 Python 环境；依赖版本快照见 requirements-frozen.txt。
 
-一、语音录制及获取（参考音，控制语气的核心）
-1. 准备 3~10 秒的清晰单人语音：安静环境、无背景音乐、无混响。
-2. 三种来源：自己用手机/麦克风录音；使用明确授权的素材；
-   游戏语音仅限个人自用（版权归米哈游，不能配布）。
-3. 多条参考音可以对应不同情绪（平静/低落/开心），按《项目文档》§4.3
-   把路径、逐字台词、情绪标签登记到 语音\ref_pool.json。
-   注意：台词必须逐字准确，写错会明显拉低合成质量。
+## 2.3 训练与启动
+1. 把语音切成 3~10 秒小段，放入切片目录。
+2. 打开 GPT-SoVITS 网页界面，依次训练 GPT 模型（.ckpt）与 SoVITS 模型（.pth）。
+3. 用 api_v2.py 在 127.0.0.1:9880 启动推理服务；参照仓库根目录的「启动芙宁娜语音服务.bat」。
+4. 语气优化：训练时提高角色日常对话语料的权重，压低演讲/念白类语料的权重。
 
-二、TTS 模型选取
-1. 推荐 GPT-SoVITS（中文效果好、社区教程多），本项目按 v2ProPlus 测试。
-2. 下载整合包，解压到项目目录下的 GPT-SoVITS-main 文件夹。
-3. 配好 Python 环境（整合包自带说明；项目快照见 requirements-frozen.txt）。
+# 第三章 · 语音适配器配置
+适配器负责协议翻译：AIRI 使用 OpenAI 语音协议，语音服务使用自有协议；同时按情绪选择参考音、处理故障兜底。
 
-三、模型训练（让嗓子像她）
-1. 把语音切成 3~10 秒的小段放进切片目录。
-2. 打开 GPT-SoVITS 的网页界面，按指引先训练 GPT 模型（.ckpt），
-   再训练 SoVITS 模型（.pth）。
-3. 训练完成后，用 api_v2.py 在 127.0.0.1:9880 启动推理服务
-   （参照仓库根目录的「启动芙宁娜语音服务.bat」改改路径就行）。
-4. 想让她说话像角色：训练时提高角色日常对话语料的权重，
-   压低演讲/念白类语料的权重（细节见《角色卡·设计说明》）。
-",
+## 3.1 默认用法（无需改动）
+1. 本仓库自带的 openai_tts_adapter.py 监听 127.0.0.1:9881，随启动脚本自动拉起。
+2. AIRI 语音设置按 1.5 节填写即可。
 
-// ==================== 第三章 ====================
-@"【第三章 · 适配器配置】
+## 3.2 换用自有语音服务
+1. 「组件路径」中：语音服务脚本改为你的启动脚本，两个地址指向你的服务。
+2. 保存配置，重启启动器。
 
-适配器是“翻译官”——AIRI 和 SoVITS 语言不通，它在中间翻译。
-
-一、它做什么
-1. 把 AIRI 的 OpenAI 语音协议翻译成 GPT-SoVITS 听得懂的协议。
-2. 按文本情绪从参考音池里选语气（平静/低落/开心），并防止一句一个腔调。
-3. 兜底防事故：某条参考音坏了自动换备用音重试，绝不让你面对一段无声。
-
-二、默认用法（什么都不用改）
-1. 本仓库自带的 openai_tts_adapter.py 监听 127.0.0.1:9881。
-2. 启动脚本会自动拉起它，无需手动操作。
-3. 在 AIRI 的 TTS 设置里填：地址 http://127.0.0.1:9881/v1，
-   模型 gpt-sovits-tts，密钥随便填（本地服务不校验）。
-
-三、换用你自己的 TTS
-1. 在启动器「组件路径」里，把 TTS 启动脚本换成你的启动方式，
-   把两个探活地址指向你的服务，保存配置即可。
-2. 自带适配器可以被完全替换，不强制使用。
-
-四、调整语气表现（进阶）
+## 3.3 语气调节（进阶）
 1. 情绪判定词表在适配器源码开头的 BRIGHT_WORDS / SOFT_WORDS。
-2. 改完参考音池或词表后，重启启动器生效。
-3. 排查听感问题看日志：语音\adapter.log 每句记录了情绪判定和用时。
-",
+2. 改动后重启启动器生效。
+3. 排查看 语音\adapter.log：每句记录了情绪判定、参考音与合成用时。
 
-// ==================== 第四章 ====================
-@"【第四章 · NewAPI 网关配置（可选）】
+# 第四章 · NewAPI 网关配置（可选）
+网关统一托管密钥并转发大模型请求。不需要可跳过整章：启动器中 NewAPI 程序留空，AIRI 直连 DeepSeek。
 
-网关是“总电闸”——密钥只放在它一处，其他程序都通过它访问大模型。
-不需要可整章跳过：启动器里 NewAPI 留空，AIRI 直连 DeepSeek 即可。
-
-一、为什么要网关
-1. 密钥单点托管：真正的 API 密钥只存在网关后台，其他程序拿本地令牌。
-2. 统一管理：换模型、换服务商只改网关一处，其他配置不动。
-3. 本项目作者用它隔离密钥，普通用户可以完全不用。
-
-二、安装
+## 4.1 安装
 1. 下载 new-api 单文件版，解压到任意目录。
-2. 在启动器「组件路径」里浏览选择 new-api.exe 和数据目录，
-   保存配置后启动器会帮你拉起它（密钥留空自动生成）。
+2. 「组件路径」中选择 new-api.exe 与数据目录；密钥留空，首次启动自动生成。
 
-三、网关后台配置
-1. 浏览器打开 http://127.0.0.1:3000 进管理后台。
-2. 新建渠道：选 DeepSeek，把你的 sk- 密钥录进去。
-3. 新建令牌，然后把 AIRI 意识模块指向 http://127.0.0.1:3000/v1 + 这个令牌。
+## 4.2 后台配置
+1. 浏览器打开 http://127.0.0.1:3000。
+2. 新建渠道：选择 DeepSeek，录入 sk- 密钥。
+3. 新建令牌；AIRI 意识模块填写 http://127.0.0.1:3000/v1 + 该令牌。
 
-四、排障
-1. 她不回话先看网关：访问 http://127.0.0.1:3000/api/status。
-2. 网关日志在它自己目录的 logs 文件夹里。
-3. 重建网关后要重做：建用户 → 建渠道 → 建令牌 → AIRI 里重新填。
-",
-    };
+## 4.3 排障
+1. 无回复先查 http://127.0.0.1:3000/api/status。
+2. 重建网关后需重做：建用户 → 建渠道 → 建令牌 → AIRI 重新填写。
+";
+}
+
+// ---------------------------------------------------------------
+// 极简 Markdown → RTF 渲染器（零依赖）
+// ---------------------------------------------------------------
+static class MiniMd
+{
+    public static string ToRtf(string md)
+    {
+        StringBuilder sb = new StringBuilder();
+        sb.Append("{\\rtf1\\ansi\\deff0");
+        sb.Append("{\\fonttbl{\\f0\\fnil\\fcharset134 Microsoft YaHei UI;}}");
+        sb.Append("{\\colortbl ;\\red25\\green90\\blue205;\\red40\\green60\\blue90;\\red30\\green30\\blue30;}");
+        sb.Append("\\viewkind4\\uc1\\pard\\f0\\fs21 ");
+        foreach (string raw in md.Replace("\r\n", "\n").Split('\n'))
+        {
+            if (raw.StartsWith("# "))
+                EmitLine(sb, raw.Substring(2), 34, true, 1, 320, 140);
+            else if (raw.StartsWith("## "))
+                EmitLine(sb, raw.Substring(3), 24, true, 2, 220, 80);
+            else if (raw.Trim().Length == 0)
+                sb.Append("\\par\\sa20 ");
+            else
+                EmitLine(sb, raw, 21, false, 3, 60, 60);
+        }
+        sb.Append("}");
+        return sb.ToString();
+    }
+
+    static void EmitLine(StringBuilder sb, string text, int fs, bool bold, int colorIdx, int before, int after)
+    {
+        sb.Append("\\par\\sb").Append(before).Append("\\sa").Append(after)
+          .Append("\\fs").Append(fs).Append("\\cf").Append(colorIdx);
+        if (bold) sb.Append("\\b ");
+        AppendEscaped(sb, text);
+        if (bold) sb.Append("\\b0 ");
+        sb.Append(' ');
+    }
+
+    static void AppendEscaped(StringBuilder sb, string s)
+    {
+        foreach (char c in s)
+        {
+            if (c == '\\' || c == '{' || c == '}') sb.Append('\\').Append(c);
+            else if (c < 128) sb.Append(c);
+            else sb.Append("\\u").Append((short)c).Append('?');
+        }
+    }
 }

@@ -294,7 +294,7 @@ public class Furina
             string bat = ResolvePath(cfg.TtsBat);
             if (!File.Exists(bat))
             {
-                Log("TTS 启动脚本不存在: " + bat + "（请在界面中配置正确的启动脚本）");
+                Log("语音服务启动脚本不存在: " + bat + "（请在界面中配置正确的启动脚本）");
                 return;
             }
             ProcessStartInfo psi = new ProcessStartInfo();
@@ -306,12 +306,12 @@ public class Furina
             ttsLastStart = DateTime.Now;
             sovitsEverReady = false;
             adapterEverReady = false;
-            Log("已执行 TTS 启动脚本（内部探活并拉起 SoVITS + 适配器）");
+            Log("已执行语音服务启动脚本（内部探活并拉起语音服务 + 适配器）");
             DeprioritizeNewPython();
         }
         catch (Exception e)
         {
-            Log("TTS 服务启动失败: " + e.Message);
+            Log("语音服务启动失败: " + e.Message);
         }
     }
 
@@ -537,8 +537,8 @@ public class Furina
             Log("未配置 NewAPI（NewApiExe 为空），跳过网关");
         }
         StartTts();
-        WaitForProbe(cfg.SoVitsProbe, cfg.TtsWarmupGraceSec, "SoVITS（模型加载约需 1 分钟）");
-        WaitForProbe(cfg.AdapterProbe, 30, "TTS 适配器");
+        WaitForProbe(cfg.SoVitsProbe, cfg.TtsWarmupGraceSec, "语音服务（模型加载约需 1 分钟）");
+        WaitForProbe(cfg.AdapterProbe, 30, "语音适配器");
         EnsureAiri();
         Log("初始化完成。");
     }
@@ -624,7 +624,7 @@ public class Furina
                     {
                         sovitsEverReady = true;
                         SetPriorityByPort(9880, ProcessPriorityClass.Normal);
-                        Log("SoVITS 首次就绪，进程优先级恢复 Normal");
+                        Log("语音服务首次就绪，进程优先级恢复 Normal");
                     }
                     sovitsFails = 0;
                 }
@@ -641,7 +641,7 @@ public class Furina
                 else if (adapterEverReady || graceOver) adapterFails++;
                 if (sovitsFails >= cfg.FailRestartThreshold || adapterFails >= cfg.FailRestartThreshold)
                 {
-                    Log("语音服务连续探活失败（SoVITS #" + sovitsFails + " / 适配器 #" + adapterFails + "），重新拉起");
+                    Log("语音服务连续探活失败（主服务 #" + sovitsFails + " / 适配器 #" + adapterFails + "），重新拉起");
                     sovitsFails = 0;
                     adapterFails = 0;
                     StartTts();

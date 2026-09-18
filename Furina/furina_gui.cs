@@ -1,14 +1,15 @@
 // -*- coding: utf-8 -*-
 /*
- * furina_gui.cs - 芙宁娜整合启动器图形界面（v3）
+ * furina_gui.cs - 芙宁娜整合启动器图形界面（v4）
  *
  * 启动流程：SplashForm（渐变背景 + "稍等片刻，你的蓝莓小蛋糕正在路上……"
  *           逐字弹跳动画：幼圆体、上白下蓝渐变、easeOutBounce 非线性缓动、
- *           渲染线程贴合显示器刷新率）。若配置完整（AIRI 与 TTS 脚本路径有效，
+ *           渲染线程贴合显示器刷新率）。若配置完整（AIRI 与语音服务脚本路径有效，
  *           NewAPI 可选）则在 Splash 阶段直接拉起全部组件，主界面打开即为
  *           "已启动"状态。
  * 主界面：组件路径（逐项即时校验 ✓/✗）、行为（互斥）、运行（启停 + 状态灯 + 教程）、
  *         实时日志。状态探活在后台线程执行，不卡 UI。
+ * 教程窗口：Markdown 全文连贯渲染，左侧章节导航点击即跳转到对应章节。
  *
  * 不带参数双击 = GUI；带参数（如 --console / --exit-after=N）走控制台模式。
  */
@@ -76,7 +77,7 @@ class Program
         return 0;
     }
 
-    // 配置完整性：AIRI 与 TTS 启动脚本必填且存在；NewAPI 可空（不使用网关）
+    // 配置完整性：AIRI 与语音服务脚本必填且存在；NewAPI 可空（不使用网关）
     static bool ConfigComplete(Furina.Cfg c)
     {
         return !string.IsNullOrEmpty(c.AiriExe) && File.Exists(c.AiriExe)
@@ -347,7 +348,7 @@ class SplashForm : Form
 }
 
 // ---------------------------------------------------------------
-// 教程窗口
+// 教程窗口：Markdown 全文连贯渲染 + 章节导航跳转
 // ---------------------------------------------------------------
 
 class TutorialForm : Form
@@ -355,34 +356,44 @@ class TutorialForm : Form
     public TutorialForm()
     {
         Text = "使用教程";
-        Width = 780;
-        Height = 580;
+        Width = 820;
+        Height = 600;
         StartPosition = FormStartPosition.CenterParent;
         Font = new Font("Microsoft YaHei UI", 9F);
 
         ListBox nav = new ListBox();
         nav.Dock = DockStyle.Left;
-        nav.Width = 200;
+        nav.Width = 210;
         nav.Font = new Font("Microsoft YaHei UI", 10F);
         nav.BorderStyle = BorderStyle.None;
         nav.BackColor = Color.FromArgb(245, 249, 253);
         foreach (string t in TutorialText.Titles) nav.Items.Add(t);
 
-        TextBox body = new TextBox();
+        RichTextBox body = new RichTextBox();
         body.Dock = DockStyle.Fill;
-        body.Multiline = true;
         body.ReadOnly = true;
-        body.ScrollBars = ScrollBars.Vertical;
-        body.WordWrap = true;
-        body.Font = new Font("Microsoft YaHei UI", 10F);
         body.BackColor = Color.White;
         body.BorderStyle = BorderStyle.None;
+        body.DetectUrls = false;
+        try
+        {
+            body.Rtf = MiniMd.ToRtf(TutorialText.FullMarkdown);
+        }
+        catch
+        {
+            body.Text = TutorialText.FullMarkdown; // RTF 解析失败兜底为纯文本
+        }
 
         nav.SelectedIndexChanged += delegate
         {
-            if (nav.SelectedIndex >= 0) body.Text = TutorialText.Contents[nav.SelectedIndex];
+            if (nav.SelectedIndex < 0) return;
+            int idx = body.Find(TutorialText.Titles[nav.SelectedIndex]);
+            if (idx >= 0)
+            {
+                body.SelectionStart = idx;
+                body.ScrollToCaret();
+            }
         };
-        nav.SelectedIndex = 0;
 
         Controls.Add(body);
         Controls.Add(nav);
@@ -399,7 +410,6 @@ class MainForm : Form
             txtSoVitsProbe, txtAdapterProbe, txtSession;
     Label markAiri, markTts, markNewApi, markNewApiDir, markNewApiProbe, markSoVits, markAdapter;
     CheckBox chkAutoExit, chkKeep;
-    NumericUpDown numInterval;
     Button btnStart, btnStop;
     Label lblStNewApi, lblStSoVits, lblStAdapter, lblStAiri;
     TextBox txtLog;
@@ -414,9 +424,9 @@ class MainForm : Form
     {
         Text = "芙宁娜 · 整合启动器";
         Width = 900;
-        Height = 720;
+        Height = 700;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(800, 640);
+        MinimumSize = new Size(800, 620);
         Font = new Font("Microsoft YaHei UI", 9F);
 
         TableLayoutPanel root = new TableLayoutPanel();
@@ -475,7 +485,7 @@ class MainForm : Form
     GroupBox BuildPathsGroup()
     {
         GroupBox grp = new GroupBox();
-        grp.Text = "组件路径（除 AIRI 外均有默认值；NewAPI 留空 = 不使用网关）";
+        grp.Text = "组件路径";
         grp.AutoSize = true;
         grp.Dock = DockStyle.Top;
         grp.Padding = new Padding(8, 4, 8, 8);
@@ -484,7 +494,7 @@ class MainForm : Form
         grid.Dock = DockStyle.Top;
         grid.AutoSize = true;
         grid.ColumnCount = 4;
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30));
@@ -496,9 +506,9 @@ class MainForm : Form
             if (p != null) txtAiri.Text = p;
         }, out markAiri);
         row++;
-        txtTtsBat = AddRow(grid, row, "TTS 启动脚本", "浏览", delegate
+        txtTtsBat = AddRow(grid, row, "语音服务脚本", "浏览", delegate
         {
-            string p = PickFile("选择 TTS 启动脚本（bat）", "批处理|*.bat;*.cmd");
+            string p = PickFile("选择语音服务启动脚本（bat）", "批处理|*.bat;*.cmd");
             if (p != null) txtTtsBat.Text = p;
         }, out markTts);
         row++;
@@ -514,11 +524,11 @@ class MainForm : Form
             if (p != null) txtNewApiDir.Text = p;
         }, out markNewApiDir);
         row++;
-        txtNewApiProbe = AddRow(grid, row, "NewAPI 探活地址", null, null, out markNewApiProbe);
+        txtNewApiProbe = AddRow(grid, row, "NewAPI 地址", null, null, out markNewApiProbe);
         row++;
-        txtSoVitsProbe = AddRow(grid, row, "SoVITS 探活地址", null, null, out markSoVits);
+        txtSoVitsProbe = AddRow(grid, row, "语音服务地址", null, null, out markSoVits);
         row++;
-        txtAdapterProbe = AddRow(grid, row, "适配器探活地址", null, null, out markAdapter);
+        txtAdapterProbe = AddRow(grid, row, "语音适配器地址", null, null, out markAdapter);
         row++;
         Label markSession;
         txtSession = AddRow(grid, row, "网关密钥（空=自动生成）", null, null, out markSession);
@@ -531,7 +541,7 @@ class MainForm : Form
     GroupBox BuildBehaviorGroup()
     {
         GroupBox grp = new GroupBox();
-        grp.Text = "行为（两个选项互斥）";
+        grp.Text = "行为";
         grp.AutoSize = true;
         grp.Dock = DockStyle.Top;
         FlowLayoutPanel flow = new FlowLayoutPanel();
@@ -554,18 +564,8 @@ class MainForm : Form
             if (chkKeep.Checked && chkAutoExit.Checked) chkAutoExit.Checked = false;
         };
 
-        Label lblInt = new Label();
-        lblInt.Text = "探活周期(秒)";
-        lblInt.AutoSize = true;
-        numInterval = new NumericUpDown();
-        numInterval.Minimum = 5;
-        numInterval.Maximum = 300;
-        numInterval.Value = 15;
-
         flow.Controls.Add(chkAutoExit);
         flow.Controls.Add(chkKeep);
-        flow.Controls.Add(lblInt);
-        flow.Controls.Add(numInterval);
         grp.Controls.Add(flow);
         return grp;
     }
@@ -596,8 +596,8 @@ class MainForm : Form
         flow.Controls.Add(btnStop);
         flow.Controls.Add(btnTutorial);
         flow.Controls.Add(MakeStatusLabel("NewAPI", out lblStNewApi));
-        flow.Controls.Add(MakeStatusLabel("SoVITS", out lblStSoVits));
-        flow.Controls.Add(MakeStatusLabel("适配器", out lblStAdapter));
+        flow.Controls.Add(MakeStatusLabel("语音服务", out lblStSoVits));
+        flow.Controls.Add(MakeStatusLabel("语音适配器", out lblStAdapter));
         flow.Controls.Add(MakeStatusLabel("AIRI", out lblStAiri));
         grp.Controls.Add(flow);
         return grp;
@@ -776,7 +776,6 @@ class MainForm : Form
         txtSession.Text = c.SessionSecret;
         chkAutoExit.Checked = c.AutoExitWithAiri;
         chkKeep.Checked = c.KeepServicesOnExit;
-        numInterval.Value = Math.Max(numInterval.Minimum, Math.Min(numInterval.Maximum, c.ProbeIntervalSec));
     }
 
     void FieldsToCfg()
@@ -792,7 +791,6 @@ class MainForm : Form
         c.SessionSecret = txtSession.Text.Trim();
         c.AutoExitWithAiri = chkAutoExit.Checked;
         c.KeepServicesOnExit = chkKeep.Checked;
-        c.ProbeIntervalSec = (int)numInterval.Value;
     }
 
     void StartRun()
