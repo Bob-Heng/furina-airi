@@ -22,6 +22,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -127,6 +128,11 @@ for _g in ('soft', 'bright'):
 _GROUP_IDX = {'soft': 0, 'calm': 0, 'bright': 0}
 # 进程级参考音黑名单：合成失败过的不再使用
 _BAD_REFS = set()
+
+# 合成串行锁：SoVITS 一次只能合一句，并发请求串行处理既不影响真实吞吐
+# （GPU 本来就是单流），又能保证"先请求的句子先返回"，播放顺序与请求顺序一致。
+# 排队中的请求在语音服务掉线恢复后按序继续（配合 _synthesize_resilient 的等待重试）。
+_SYNTH_LOCK = threading.Lock()
 
 # 粘性状态
 _last_ref = None
@@ -253,7 +259,7 @@ def _synthesize(text, ref):
         headers={'Content-Type': 'application/json'},
         method='POST',
     )
-    with urllib.request.urlopen(upstream, timeout=120) as resp:
+    with urllib.request.urlopen(upstream, timeout=30) as resp:
         wav = resp.read()
     dur = 0.0
     try:
@@ -362,27 +368,28 @@ class H(BaseHTTPRequestHandler):
                 return
             ref, mood, sticky = _pick_ref(text)
             t0 = time.time()
-            try:
-                wav, dur = _synthesize_resilient(text, ref)
-            except Exception as e:
-                _log('ERROR: %s' % e)
-                self._send_json(502, {'error': f'upstream GPT-SoVITS failed: {e}'})
-                return
-            # 时长合理性检查：合成结果相对字数明显偏短，多半是塌成了气声/吞字，
-            # 换兜底参考音重试一次。留 0.08s 余量，避免边界值（如 2.0s<2.0s）误触发。
-            min_dur = max(0.6, 0.20 * _hanzi_count(text))
-            if dur < min_dur - 0.08:
-                fallback = next(
-                    (r for r in _GROUP_REFS['calm']
-                     if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
-                    None)
-                if fallback is not None:
-                    _log('audio too short (%.1fs < %.1fs) ref=%s -> retry with %s' % (
-                        dur, min_dur, os.path.basename(ref['path']),
-                        os.path.basename(fallback['path'])))
-                    ref, sticky = fallback, False
-                    wav, dur = _synthesize(text, ref)
-            wav = _pad_wav(wav)
+            with _SYNTH_LOCK:
+                try:
+                    wav, dur = _synthesize_resilient(text, ref)
+                except Exception as e:
+                    _log('ERROR: %s' % e)
+                    self._send_json(502, {'error': f'upstream GPT-SoVITS failed: {e}'})
+                    return
+                # 时长合理性检查：合成结果相对字数明显偏短，多半是塌成了气声/吞字，
+                # 换兜底参考音重试一次。留 0.08s 余量，避免边界值（如 2.0s<2.0s）误触发。
+                min_dur = max(0.6, 0.20 * _hanzi_count(text))
+                if dur < min_dur - 0.08:
+                    fallback = next(
+                        (r for r in _GROUP_REFS['calm']
+                         if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
+                        None)
+                    if fallback is not None:
+                        _log('audio too short (%.1fs < %.1fs) ref=%s -> retry with %s' % (
+                            dur, min_dur, os.path.basename(ref['path']),
+                            os.path.basename(fallback['path'])))
+                        ref, sticky = fallback, False
+                        wav, dur = _synthesize(text, ref)
+                wav = _pad_wav(wav)
             _log('tts %d chars mood=%s%s ref=%s -> %.1fs audio, %.1fs gen | %s' % (
                 len(text), mood, '(sticky)' if sticky else '',
                 os.path.basename(ref['path']), dur, time.time() - t0,

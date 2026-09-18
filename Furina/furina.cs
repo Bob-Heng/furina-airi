@@ -66,6 +66,7 @@ public class Furina
     // 组件"就绪过一次"标记：就绪前享有加载宽限，就绪后掉线立刻计数重拉
     static bool sovitsEverReady = false;
     static bool adapterEverReady = false;
+    static volatile bool voiceWarmed = false;
     static DateTime ttsLastStart = DateTime.MinValue;
     static bool tornDown = true;   // 开始时视为"已回收"，RunAll 前由 ResetState 复位
     static volatile bool closing = false;
@@ -361,6 +362,7 @@ public class Furina
             ttsLastStart = DateTime.Now;
             sovitsEverReady = false;
             adapterEverReady = false;
+            voiceWarmed = false;   // 新进程，G2PW 会话需重新热机
             Log("已执行语音服务启动脚本（内部探活并拉起语音服务 + 适配器）");
             DeprioritizeNewPython();
         }
@@ -508,6 +510,59 @@ public class Furina
         catch { }
     }
 
+    // 每次启动清空运行期日志：问题现场只保留本次运行，有问题现场问 AI，不过夜
+    static void TruncateRuntimeLogs()
+    {
+        try
+        {
+            string voiceDir = Path.Combine(Path.GetDirectoryName(ResolvePath(cfg.TtsBat)), "语音");
+            foreach (string name in new string[] { "adapter.log", "tts_api.log" })
+            {
+                try
+                {
+                    string p = Path.Combine(voiceDir, name);
+                    if (File.Exists(p)) File.WriteAllText(p, "");
+                }
+                catch { }
+            }
+            Log("已清空 adapter.log / tts_api.log（只保留本次运行的问题现场）");
+        }
+        catch { }
+    }
+
+    // 语音合成自动热机：SoVITS 新进程首次合成约 19 秒（G2PW 建会话），
+    // 就绪后立刻发一句预热请求建立会话，用户开口即是热机速度。
+    static void WarmUpVoice()
+    {
+        if (voiceWarmed) return;
+        voiceWarmed = true;
+        new Thread(delegate ()
+        {
+            try
+            {
+                string baseUrl = cfg.AdapterProbe;
+                int cut = baseUrl.LastIndexOf("/health", StringComparison.OrdinalIgnoreCase);
+                if (cut > 0) baseUrl = baseUrl.Substring(0, cut);
+                string payload = "{\"model\":\"gpt-sovits-tts\",\"input\":\"预热一下。\",\"voice\":\"furina\"}";
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(baseUrl + "/v1/audio/speech");
+                req.Method = "POST";
+                req.ContentType = "application/json; charset=utf-8";
+                req.Timeout = 60000;
+                byte[] bytes = Encoding.UTF8.GetBytes(payload);
+                using (Stream s = req.GetRequestStream()) s.Write(bytes, 0, bytes.Length);
+                using (WebResponse resp = req.GetResponse())
+                {
+                    // 丢弃音频内容，目的只是建立 G2PW 会话
+                }
+                Log("语音合成已热机，开口即是热机速度");
+            }
+            catch (Exception e)
+            {
+                Log("热机请求失败（不影响使用，首句会稍慢）: " + e.Message);
+            }
+        }) { IsBackground = true }.Start();
+    }
+
     static void KillTree(int pid)
     {
         try
@@ -606,6 +661,7 @@ public class Furina
     public static void RunAll()
     {
         Log("=== furina 启动器 | base=" + baseDir + " ===");
+        TruncateRuntimeLogs();
         if (NewApiEnabled)
         {
             BackupNewApiDb();
@@ -619,6 +675,7 @@ public class Furina
         StartTts();
         WaitForProbe(cfg.SoVitsProbe, cfg.TtsWarmupGraceSec, "语音服务（模型加载约需 1 分钟）");
         WaitForProbe(cfg.AdapterProbe, 30, "语音适配器");
+        WarmUpVoice();
         EnsureAiri();
         Log("初始化完成。");
     }
@@ -687,6 +744,7 @@ public class Furina
                         sovitsEverReady = true;
                         SetPriorityByPort(9880, ProcessPriorityClass.Normal);
                         Log("语音服务首次就绪，进程优先级恢复 Normal");
+                        WarmUpVoice();
                     }
                     sovitsFails = 0;
                     if (cs == ComponentState.Busy) LogBusyOnce("语音服务");
