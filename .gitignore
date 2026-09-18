@@ -32,6 +32,9 @@ Furina/furina.exe
 众水纪行/*.psd
 # 设定汇编含游戏原文编译，仅本机参考用，不公开放出
 众水纪行/
+# 运行时产物（含对话内容，随启动清空重建，不入库）
+llm_guard.log
+语音/act_mood_map.json
 *.tmp
 
 # 系统垃圾
