@@ -45,7 +45,10 @@ CORRECTION = ('你的上一段回复超过了长度限制（%d字）。请在完
 # 实现语音与动作的情绪同源。段边界 = ACT token 出现的位置（与原文顺序一致）。
 _STAGE_RE = re.compile(r'<\|.*?\|>', re.DOTALL)
 _ACT_RE = re.compile(r'<\|\s*ACT\b', re.IGNORECASE)
-_EMOTION_RE = re.compile(r'emotion\s*=\s*"?([A-Za-z_]+)"?', re.IGNORECASE)
+# AIRI 实际格式为 <|ACT {"emotion":{"name":"happy","intensity":0.8}}|>（JSON），
+# 兼容旧式 emotion="happy" 写法
+_EMOTION_RE = re.compile(r'"emotion"\s*:\s*\{[^}]*?"name"\s*:\s*"([A-Za-z_]+)"', re.IGNORECASE)
+_EMOTION_RE_FALLBACK = re.compile(r'emotion\s*=\s*"?([A-Za-z_]+)"?', re.IGNORECASE)
 
 # AIRI 动作系统的 emotion 名 → 适配器参考音池（soft/calm/bright）
 _EMOTION_POOL = {
@@ -68,27 +71,34 @@ MOOD_MAP_FILE = os.path.join(BASE_DIR, '语音', 'act_mood_map.json')
 
 
 def _parse_act_segments(content):
-    """剥离全部舞台指令得正文；按 ACT 分界得到 [{mood, text}] 段（原文顺序）。"""
+    """剥离全部舞台指令得正文；按 ACT 分界得到 [{mood, text}] 段（原文顺序）。
+
+    ACT 之间的正文累积进当前情绪段；DELAY/CALL 等非 ACT 指令只从正文剥离，
+    不切断情绪段（其前后文本同属一种情绪）。
+    """
     segments = []
     plain_parts = []
     cur_emotion = None
+    pending = ''
     pos = 0
     for m in _STAGE_RE.finditer(content):
         seg = content[pos:m.start()]
-        if _ACT_RE.match(m.group(0)):
-            if seg.strip():
-                segments.append({'mood': _pool_of(cur_emotion), 'text': seg.strip()})
-                plain_parts.append(seg)
-            em = _EMOTION_RE.search(m.group(0))
-            cur_emotion = em.group(1) if em else None
-        else:
-            # DELAY/CALL 等非 ACT 舞台指令：从正文丢弃，但不切开情绪段
+        if seg.strip():
+            pending += seg
             plain_parts.append(seg)
+        if _ACT_RE.match(m.group(0)):
+            if pending.strip():
+                segments.append({'mood': _pool_of(cur_emotion), 'text': pending.strip()})
+                pending = ''
+            em = _EMOTION_RE.search(m.group(0)) or _EMOTION_RE_FALLBACK.search(m.group(0))
+            cur_emotion = em.group(1) if em else None
         pos = m.end()
     tail = content[pos:]
     if tail.strip():
-        segments.append({'mood': _pool_of(cur_emotion), 'text': tail.strip()})
+        pending += tail
         plain_parts.append(tail)
+    if pending.strip():
+        segments.append({'mood': _pool_of(cur_emotion), 'text': pending.strip()})
     return ''.join(plain_parts), segments
 
 
