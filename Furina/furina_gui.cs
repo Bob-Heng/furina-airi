@@ -411,7 +411,7 @@ class MainForm : Form
     Label markAiri, markTts, markNewApi, markNewApiDir, markNewApiProbe, markSoVits, markAdapter;
     CheckBox chkAutoExit, chkKeep;
     Button btnStart, btnStop;
-    Label lblStNewApi, lblStSoVits, lblStAdapter, lblStAiri;
+    Label lblStNewApi, lblStSoVits, lblStAdapter, lblStAiri, lblStGuard;
     TextBox txtLog;
     System.Windows.Forms.Timer statusTimer;
     System.Windows.Forms.Timer validateTimer;
@@ -596,6 +596,7 @@ class MainForm : Form
         flow.Controls.Add(btnStop);
         flow.Controls.Add(btnTutorial);
         flow.Controls.Add(MakeStatusLabel("NewAPI", out lblStNewApi));
+        flow.Controls.Add(MakeStatusLabel("LLM守卫", out lblStGuard));
         flow.Controls.Add(MakeStatusLabel("语音服务", out lblStSoVits));
         flow.Controls.Add(MakeStatusLabel("语音适配器", out lblStAdapter));
         flow.Controls.Add(MakeStatusLabel("AIRI", out lblStAiri));
@@ -836,12 +837,19 @@ class MainForm : Form
         {
             try
             {
-                Tuple<string, bool?> stNewApi, stSoVits, stAdapter, stAiri;
+                Tuple<string, bool?> stNewApi, stSoVits, stAdapter, stAiri, stGuard;
                 if (Furina.NewApiEnabled)
                 {
                     stNewApi = ProbeStatus(Furina.cfg.NewApiProbe);
+                    if (Furina.cfg.LlmGuardEnabled)
+                        stGuard = ProbeStatus("http://127.0.0.1:" + Furina.cfg.LlmGuardPort + "/health");
+                    else stGuard = new Tuple<string, bool?>("未启用", null);
                 }
-                else stNewApi = new Tuple<string, bool?>("未启用", null);
+                else
+                {
+                    stNewApi = new Tuple<string, bool?>("未启用", null);
+                    stGuard = new Tuple<string, bool?>("未启用", null);
+                }
 
                 stSoVits = ProbeStatus(Furina.cfg.SoVitsProbe);
                 stAdapter = ProbeStatus(Furina.cfg.AdapterProbe);
@@ -851,6 +859,7 @@ class MainForm : Form
                 Ui(delegate
                 {
                     SetStatus(lblStNewApi, stNewApi);
+                    SetStatus(lblStGuard, stGuard);
                     SetStatus(lblStSoVits, stSoVits);
                     SetStatus(lblStAdapter, stAdapter);
                     SetStatus(lblStAiri, stAiri);

@@ -361,6 +361,12 @@ class H(BaseHTTPRequestHandler):
             if not text:
                 self._send_json(400, {'error': 'empty input'})
                 return
+            # 长度保险丝：单句请求异常过长（正常为句片段）直接拒绝，避免拖死合成服务
+            if _hanzi_count(text) > 500:
+                _log('reject: input too long (%d chars) | %s...' % (
+                    _hanzi_count(text), text[:30]))
+                self._send_json(400, {'error': 'input too long (max 500 chars per request)'})
+                return
             # 纯标点/语气残留不值得合成——SoVITS 会把它变成莫名其妙的语气词
             if not re.search(r'[一-鿿A-Za-z0-9]', text):
                 _log('skip(punct-only): %r -> 0.3s silence' % text)

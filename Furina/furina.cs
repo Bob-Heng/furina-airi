@@ -56,6 +56,12 @@ public class Furina
         public int TtsWarmupGraceSec = 180;
         public bool AutoExitWithAiri = true;
         public bool KeepServicesOnExit = false;
+        // LLM 守卫代理（输出长度前置检查；AIRI 指向它而非直连网关）
+        public bool LlmGuardEnabled = true;
+        public int LlmGuardPort = 3001;
+        public int LlmGuardMaxChars = 1000;
+        public string LlmGuardUpstream = "";
+        public string PythonExe = @"..\sovits-venv\Scripts\python.exe";
     }
 
     public static Cfg cfg = new Cfg();
@@ -143,7 +149,7 @@ public class Furina
         FinalizePaths();
     }
 
-    // 派生路径：OneApiDb 未填 → NewApiDir\one-api.db
+    // 派生路径：OneApiDb 未填 → NewApiDir\one-api.db；LlmGuardUpstream 未填 → 由 NewApiProbe 推导
     static void FinalizePaths()
     {
         cfg.LogDir = ResolvePath(cfg.LogDir);
@@ -156,6 +162,13 @@ public class Furina
         else
         {
             cfg.OneApiDb = ResolvePath(cfg.OneApiDb);
+        }
+        if (string.IsNullOrEmpty(cfg.LlmGuardUpstream) && NewApiEnabled)
+        {
+            // http://127.0.0.1:3000/api/status → http://127.0.0.1:3000/v1
+            string u = cfg.NewApiProbe;
+            int cut = u.LastIndexOf("/api/", StringComparison.OrdinalIgnoreCase);
+            cfg.LlmGuardUpstream = (cut > 0 ? u.Substring(0, cut) : u.TrimEnd('/')) + "/v1";
         }
     }
 
@@ -186,6 +199,17 @@ public class Furina
         sb.AppendLine("TtsWarmupGraceSec=" + cfg.TtsWarmupGraceSec);
         sb.AppendLine("AutoExitWithAiri=" + cfg.AutoExitWithAiri);
         sb.AppendLine("KeepServicesOnExit=" + cfg.KeepServicesOnExit);
+        sb.AppendLine();
+        sb.AppendLine("[llmguard]");
+        sb.AppendLine("# 输出长度守卫代理：AIRI 的 API 地址指向它（默认 127.0.0.1:3001/v1），");
+        sb.AppendLine("# 超过 MaxChars 字的回复会在显示前被打回上游压缩重生成");
+        sb.AppendLine("Enabled=" + cfg.LlmGuardEnabled);
+        sb.AppendLine("Port=" + cfg.LlmGuardPort);
+        sb.AppendLine("MaxChars=" + cfg.LlmGuardMaxChars);
+        sb.AppendLine("Upstream=" + cfg.LlmGuardUpstream);
+        sb.AppendLine();
+        sb.AppendLine("[runtime]");
+        sb.AppendLine("PythonExe=" + cfg.PythonExe);
         File.WriteAllText(iniPath, sb.ToString(), new UTF8Encoding(false));
     }
 
@@ -209,6 +233,11 @@ public class Furina
             case "ttswarmupgracesec": int wg; if (int.TryParse(val, out wg) && wg > 0) cfg.TtsWarmupGraceSec = wg; break;
             case "autoexitwithairi": bool ax; if (bool.TryParse(val, out ax)) cfg.AutoExitWithAiri = ax; break;
             case "keepservicesonexit": bool ks; if (bool.TryParse(val, out ks)) cfg.KeepServicesOnExit = ks; break;
+            case "llmguardenabled": bool lg; if (bool.TryParse(val, out lg)) cfg.LlmGuardEnabled = lg; break;
+            case "llmguardport": int lgp; if (int.TryParse(val, out lgp) && lgp > 0) cfg.LlmGuardPort = lgp; break;
+            case "llmguardmaxchars": int lgm; if (int.TryParse(val, out lgm) && lgm > 0) cfg.LlmGuardMaxChars = lgm; break;
+            case "llmguardupstream": cfg.LlmGuardUpstream = val; break;
+            case "pythonexe": cfg.PythonExe = val; break;
         }
     }
 
@@ -515,7 +544,8 @@ public class Furina
     {
         try
         {
-            string voiceDir = Path.Combine(Path.GetDirectoryName(ResolvePath(cfg.TtsBat)), "语音");
+            string rootDir = Path.GetDirectoryName(ResolvePath(cfg.TtsBat));
+            string voiceDir = Path.Combine(rootDir, "语音");
             foreach (string name in new string[] { "adapter.log", "tts_api.log" })
             {
                 try
@@ -525,7 +555,13 @@ public class Furina
                 }
                 catch { }
             }
-            Log("已清空 adapter.log / tts_api.log（只保留本次运行的问题现场）");
+            try
+            {
+                string g = Path.Combine(rootDir, "llm_guard.log");
+                if (File.Exists(g)) File.WriteAllText(g, "");
+            }
+            catch { }
+            Log("已清空 adapter.log / tts_api.log / llm_guard.log（只保留本次运行的问题现场）");
         }
         catch { }
     }
@@ -626,8 +662,12 @@ public class Furina
             {
                 KillByPort(9881);
                 KillByPort(9880);
-                if (NewApiEnabled) KillByPort(3000);
-                Log(NewApiEnabled ? "NewAPI 与语音服务已停止" : "语音服务已停止");
+                if (NewApiEnabled)
+                {
+                    if (cfg.LlmGuardEnabled) KillByPort(cfg.LlmGuardPort);
+                    KillByPort(3000);
+                }
+                Log(NewApiEnabled ? "NewAPI、LLM 守卫与语音服务已停止" : "语音服务已停止");
             }
             else
             {
@@ -657,6 +697,33 @@ public class Furina
         FinalizePaths();
     }
 
+    // LLM 守卫代理：输出长度前置检查（AIRI → 守卫 → 网关）
+    static void StartLlmGuard()
+    {
+        if (!cfg.LlmGuardEnabled || !NewApiEnabled) return;
+        string health = "http://127.0.0.1:" + cfg.LlmGuardPort + "/health";
+        if (Probe(health)) return;
+        try
+        {
+            string py = ResolvePath(cfg.PythonExe);
+            string script = Path.Combine(Path.GetDirectoryName(ResolvePath(cfg.TtsBat)), "llm_guard.py");
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = py;
+            psi.Arguments = string.Format(
+                "\"{0}\" --port {1} --upstream \"{2}\" --max-chars {3}",
+                script, cfg.LlmGuardPort, cfg.LlmGuardUpstream, cfg.LlmGuardMaxChars);
+            psi.WorkingDirectory = Path.GetDirectoryName(script);
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            Process p = Process.Start(psi);
+            Log("LLM 守卫已拉起 PID=" + p.Id + "（:300" + "1，上限 " + cfg.LlmGuardMaxChars + " 字）");
+        }
+        catch (Exception e)
+        {
+            Log("LLM 守卫启动失败: " + e.Message);
+        }
+    }
+
     // GUI 与控制台共用的初始化流程
     public static void RunAll()
     {
@@ -667,10 +734,12 @@ public class Furina
             BackupNewApiDb();
             StartNewApi();
             WaitForProbe(cfg.NewApiProbe, 60, "NewAPI");
+            StartLlmGuard();
+            WaitForProbe("http://127.0.0.1:" + cfg.LlmGuardPort + "/health", 30, "LLM 守卫");
         }
         else
         {
-            Log("未配置 NewAPI（NewApiExe 为空），跳过网关");
+            Log("未配置 NewAPI（NewApiExe 为空），跳过网关与 LLM 守卫");
         }
         StartTts();
         WaitForProbe(cfg.SoVitsProbe, cfg.TtsWarmupGraceSec, "语音服务（模型加载约需 1 分钟）");
@@ -688,7 +757,7 @@ public class Furina
     // exitAfterSec>0 时到达秒数自动返回；GUI 模式传 0，靠 RequestStop
     public static void WatchdogLoop(int exitAfterSec)
     {
-        int newapiFails = 0, sovitsFails = 0, adapterFails = 0;
+        int newapiFails = 0, sovitsFails = 0, adapterFails = 0, guardFails = 0;
         int ticks = 0, elapsed = 0;
         while (true)
         {
@@ -805,6 +874,26 @@ public class Furina
                             newapiFails = 0;
                             Log("尝试重拉 NewAPI");
                             StartNewApi();
+                        }
+                    }
+                }
+
+                // LLM 守卫：同节奏探活，掉了重拉（它只在本机，拒绝连接即真死）
+                if (cfg.LlmGuardEnabled && NewApiEnabled)
+                {
+                    ComponentState cg = ProbeComponent("http://127.0.0.1:" + cfg.LlmGuardPort + "/health");
+                    if (cg == ComponentState.Alive || cg == ComponentState.Busy)
+                    {
+                        guardFails = 0;
+                    }
+                    else
+                    {
+                        guardFails++;
+                        if (guardFails >= cfg.FailRestartThreshold)
+                        {
+                            guardFails = 0;
+                            Log("尝试重拉 LLM 守卫");
+                            StartLlmGuard();
                         }
                     }
                 }
