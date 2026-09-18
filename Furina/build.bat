@@ -16,10 +16,7 @@ rem /target:winexe = GUI 程序（双击无控制台黑窗）；加参数运行�
 "%CSC%" /nologo /codepage:65001 /target:winexe /platform:anycpu /out:furina.exe ^
     furina.cs furina_gui.cs ^
     /reference:System.Windows.Forms.dll ^
-    /reference:System.Drawing.dll ^
-    /reference:System.Web.Extensions.dll ^
-    /reference:System.IO.Compression.dll ^
-    /reference:System.IO.Compression.FileSystem.dll
+    /reference:System.Drawing.dll
 if errorlevel 1 (
     echo [FAIL] build failed
     exit /b 1

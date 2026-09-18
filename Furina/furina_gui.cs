@@ -2,9 +2,11 @@
 /*
  * furina_gui.cs - 芙宁娜整合启动器图形界面
  *
- * 启动器页：浏览选择 AIRI / TTS 启动脚本 / NewAPI（可选）路径 → 保存配置 → 一键启动/停止，
- *           四组件状态灯 + 实时日志。除 AIRI 外所有项都有默认值（项目自带 TTS 方案）。
- * 角色卡页：选择 card.json → 外部编辑器修改 → 一键打包备份 → 内置题库验收测试。
+ * 启动流程：SplashForm（进度条 + "稍等片刻，你的蓝莓小蛋糕正在路上……"逐字弹跳动画）
+ *           后台完成配置载入后再进入主界面。
+ * 主界面：组件路径（逐项即时校验 ✓/✗，NewAPI 三项依赖网关程序校验通过才可填写）、
+ *         行为（两个勾选项互斥）、运行（状态灯 + 启停）、实时日志。
+ * 状态探活在后台线程执行，避免 HTTP 超时阻塞 UI。
  *
  * 不带参数双击 = GUI；带参数（如 --console / --exit-after=N）走控制台模式。
  */
@@ -13,11 +15,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
-using System.IO.Compression;
 using System.Net;
 using System.Text;
 using System.Threading;
-using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 class Program
@@ -34,127 +34,280 @@ class Program
             MessageBox.Show(e.Exception.ToString(), "furina 未处理异常");
         };
         Furina.InitPaths();
+
+        // 启动画面：动画播放与配置载入并行，两者都完成才进主界面
+        SplashForm splash = new SplashForm();
+        splash.Show();
+        ManualResetEvent initDone = new ManualResetEvent(false);
+        new Thread(delegate ()
+        {
+            try { Furina.LoadIni(); }
+            catch { }
+            Thread.Sleep(2300); // 至少放完一轮动画
+            initDone.Set();
+        }) { IsBackground = true }.Start();
+        while (!initDone.WaitOne(0)) Application.DoEvents();
+        splash.Close();
+
         Application.Run(new MainForm());
         return 0;
     }
 }
 
+// ---------------------------------------------------------------
+// 启动画面
+// ---------------------------------------------------------------
+
+class SplashForm : Form
+{
+    const string MSG = "稍等片刻，你的蓝莓小蛋糕正在路上……";
+    readonly Label[] chars = new Label[MSG.Length];
+    readonly int baseY = 66;
+    int tick;
+    readonly System.Windows.Forms.Timer tmr;
+
+    public SplashForm()
+    {
+        FormBorderStyle = FormBorderStyle.None;
+        StartPosition = FormStartPosition.CenterScreen;
+        Size = new Size(520, 230);
+        BackColor = Color.FromArgb(255, 246, 250);
+        DoubleBuffered = true;
+
+        Label caption = new Label();
+        caption.Text = "furina 正在初始化";
+        caption.Font = new Font("Microsoft YaHei UI", 9);
+        caption.ForeColor = Color.Gray;
+        caption.AutoSize = true;
+        caption.Location = new Point((Width - caption.PreferredWidth) / 2, 24);
+        Controls.Add(caption);
+
+        using (Graphics g = CreateGraphics())
+        {
+            // 按实际字宽居中排布每个字
+            Font f = new Font("Microsoft YaHei UI", 17, FontStyle.Bold);
+            int total = 0;
+            int[] widths = new int[MSG.Length];
+            for (int i = 0; i < MSG.Length; i++)
+            {
+                widths[i] = TextRenderer.MeasureText(g, MSG[i].ToString(), f).Width - 6;
+                total += widths[i];
+            }
+            int x = (Width - total) / 2;
+            for (int i = 0; i < MSG.Length; i++)
+            {
+                chars[i] = new Label();
+                chars[i].Text = MSG[i].ToString();
+                chars[i].Font = f;
+                chars[i].ForeColor = Color.FromArgb(214, 84, 140);
+                chars[i].AutoSize = false;
+                chars[i].Size = new Size(widths[i] + 8, 34);
+                chars[i].TextAlign = ContentAlignment.MiddleCenter;
+                chars[i].Location = new Point(x, baseY - 60);
+                chars[i].Visible = false;
+                Controls.Add(chars[i]);
+                x += widths[i];
+            }
+        }
+
+        ProgressBar bar = new ProgressBar();
+        bar.Style = ProgressBarStyle.Marquee;
+        bar.Size = new Size(380, 10);
+        bar.Location = new Point((Width - 380) / 2, 150);
+        Controls.Add(bar);
+
+        tmr = new System.Windows.Forms.Timer();
+        tmr.Interval = 30;
+        tmr.Tick += delegate { Animate(); };
+        tmr.Start();
+    }
+
+    void Animate()
+    {
+        tick++;
+        bool allLanded = true;
+        for (int i = 0; i < chars.Length; i++)
+        {
+            int start = i * 7;                 // 逐字延迟登场
+            double p = (tick - start) / 45.0;  // 每个字 45 tick 完成
+            if (p < 0) { chars[i].Visible = false; allLanded = false; continue; }
+            chars[i].Visible = true;
+            if (p >= 1)
+            {
+                chars[i].Top = baseY;
+                continue;
+            }
+            allLanded = false;
+            chars[i].Top = baseY - BounceOffset(p);
+        }
+        // 全部落稳后停 30 tick 再循环
+        if (allLanded && tick > chars.Length * 7 + 45 + 30) tick = 0;
+    }
+
+    // 下落 + 衰减弹跳：p∈[0,1]
+    static int BounceOffset(double p)
+    {
+        if (p < 0.4) return (int)((1 - p / 0.4) * 60);   // 从上方 60px 落下
+        double q = (p - 0.4) / 0.6;
+        return (int)(Math.Abs(Math.Sin(q * Math.PI * 2.5)) * (1 - q) * 14);
+    }
+}
+
+// ---------------------------------------------------------------
+// 主界面
+// ---------------------------------------------------------------
+
 class MainForm : Form
 {
-    // 启动器页控件
     TextBox txtAiri, txtTtsBat, txtNewApiExe, txtNewApiDir, txtNewApiProbe,
             txtSoVitsProbe, txtAdapterProbe, txtSession;
+    Label markAiri, markTts, markNewApi, markNewApiDir, markNewApiProbe, markSoVits, markAdapter;
     CheckBox chkAutoExit, chkKeep;
     NumericUpDown numInterval;
-    Button btnSave, btnStart, btnStop;
+    Button btnStart, btnStop;
     Label lblStNewApi, lblStSoVits, lblStAdapter, lblStAiri;
     TextBox txtLog;
     System.Windows.Forms.Timer statusTimer;
-
-    // 角色卡页控件
-    TextBox txtCardJson, txtCardZip, txtApiBase, txtApiKey, txtModel, txtResults;
-    Button btnEditCard, btnPack, btnTest;
-    Label lblPackResult, lblTestStatus;
+    System.Windows.Forms.Timer validateTimer;
+    ToolTip toolTip = new ToolTip();
+    volatile bool probing;
 
     Thread runThread;
-    Thread testThread;
-
-    static readonly string DEFAULT_MANIFEST =
-        "{\"format\":\"airi-character-card\",\"version\":1,\"card\":{\"path\":\"card.json\",\"spec\":\"chara_card_v3\"}}";
 
     public MainForm()
     {
         Text = "芙宁娜 · 整合启动器";
-        Width = 860;
-        Height = 720;
+        Width = 880;
+        Height = 700;
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(760, 620);
+        MinimumSize = new Size(780, 620);
 
-        TabControl tabs = new TabControl();
-        tabs.Dock = DockStyle.Fill;
-        tabs.TabPages.Add(BuildLauncherTab());
-        tabs.TabPages.Add(BuildCardTab());
-        Controls.Add(tabs);
-
-        statusTimer = new System.Windows.Forms.Timer();
-        statusTimer.Interval = 2000;
-        statusTimer.Tick += delegate { RefreshStatus(); };
-        statusTimer.Start();
-
-        Furina.OnLog += OnCoreLog;
-        Furina.LoadIni();
-        FieldsFromCfg();
-        AppendLog("配置已载入。浏览选择你的组件路径后点「启动」。");
-    }
-
-    // ---------------------------------------------------------------
-    // 启动器页
-    // ---------------------------------------------------------------
-
-    TabPage BuildLauncherTab()
-    {
-        TabPage page = new TabPage("启动器");
         TableLayoutPanel root = new TableLayoutPanel();
         root.Dock = DockStyle.Top;
         root.AutoSize = true;
         root.ColumnCount = 1;
         root.Padding = new Padding(8);
+        root.Controls.Add(BuildPathsGroup(), 0, 0);
+        root.Controls.Add(BuildBehaviorGroup(), 0, 1);
+        root.Controls.Add(BuildRunGroup(), 0, 2);
+        Controls.Add(root);
 
-        GroupBox grpPaths = new GroupBox();
-        grpPaths.Text = "组件路径（除 AIRI 外均有默认值；NewAPI 留空 = 不使用网关）";
-        grpPaths.AutoSize = true;
-        grpPaths.Dock = DockStyle.Top;
+        txtLog = new TextBox();
+        txtLog.Dock = DockStyle.Bottom;
+        txtLog.Height = 165;
+        txtLog.Multiline = true;
+        txtLog.ReadOnly = true;
+        txtLog.ScrollBars = ScrollBars.Vertical;
+        txtLog.BackColor = Color.FromArgb(30, 30, 30);
+        txtLog.ForeColor = Color.FromArgb(200, 200, 200);
+        txtLog.Font = new Font("Consolas", 9);
+        Controls.Add(txtLog);
+        root.BringToFront();
+
+        // 校验防抖：输入停顿 400ms 后统一验证
+        validateTimer = new System.Windows.Forms.Timer();
+        validateTimer.Interval = 400;
+        validateTimer.Tick += delegate { validateTimer.Stop(); ValidateAll(); };
+
+        statusTimer = new System.Windows.Forms.Timer();
+        statusTimer.Interval = 2000;
+        statusTimer.Tick += delegate { RefreshStatusAsync(); };
+        statusTimer.Start();
+
+        HookTextChanged();
+        FieldsFromCfg();
+        ValidateAll();
+
+        Furina.OnLog += OnCoreLog;
+        AppendLog("配置已载入。浏览选择你的组件路径后点「启动」。");
+    }
+
+    // ---------------------------------------------------------------
+    // 界面构建
+    // ---------------------------------------------------------------
+
+    GroupBox BuildPathsGroup()
+    {
+        GroupBox grp = new GroupBox();
+        grp.Text = "组件路径（除 AIRI 外均有默认值；NewAPI 留空 = 不使用网关）";
+        grp.AutoSize = true;
+        grp.Dock = DockStyle.Top;
+
         TableLayoutPanel grid = new TableLayoutPanel();
         grid.Dock = DockStyle.Top;
         grid.AutoSize = true;
-        grid.ColumnCount = 3;
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
+        grid.ColumnCount = 4;
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 60));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 30));
 
         int row = 0;
-        txtAiri = AddRow(grid, row++, "AIRI 程序", "浏览", false, delegate
+        txtAiri = AddRow(grid, row, "AIRI 程序", "浏览", delegate
         {
             string p = PickFile("选择 AIRI 主程序 (airi.exe)", "可执行文件|*.exe");
             if (p != null) txtAiri.Text = p;
-        });
-        txtTtsBat = AddRow(grid, row++, "TTS 启动脚本", "浏览", false, delegate
+        }, out markAiri);
+        row++;
+        txtTtsBat = AddRow(grid, row, "TTS 启动脚本", "浏览", delegate
         {
-            string p = PickFile("选择 TTS 启动脚本（bat）", "批处理|*.bat");
+            string p = PickFile("选择 TTS 启动脚本（bat）", "批处理|*.bat;*.cmd");
             if (p != null) txtTtsBat.Text = p;
-        });
-        txtNewApiExe = AddRow(grid, row++, "NewAPI 程序（可空）", "浏览", false, delegate
+        }, out markTts);
+        row++;
+        txtNewApiExe = AddRow(grid, row, "NewAPI 程序（可空）", "浏览", delegate
         {
             string p = PickFile("选择 NewAPI 主程序（不需要网关可跳过）", "可执行文件|*.exe");
             if (p != null) txtNewApiExe.Text = p;
-        });
-        txtNewApiDir = AddRow(grid, row++, "NewAPI 数据目录", "浏览", true, delegate
+        }, out markNewApi);
+        row++;
+        txtNewApiDir = AddRow(grid, row, "NewAPI 数据目录", "浏览", delegate
         {
             string p = PickFolder("选择 NewAPI 数据目录（含 one-api.db）");
             if (p != null) txtNewApiDir.Text = p;
-        });
-        txtNewApiProbe = AddRow(grid, row++, "NewAPI 探活地址", null, false, null);
-        txtSoVitsProbe = AddRow(grid, row++, "SoVITS 探活地址", null, false, null);
-        txtAdapterProbe = AddRow(grid, row++, "适配器探活地址", null, false, null);
-        txtSession = AddRow(grid, row++, "网关密钥（空=自动生成）", null, false, null);
-        grpPaths.Controls.Add(grid);
-        root.Controls.Add(grpPaths, 0, root.RowCount);
-        root.RowCount++;
+        }, out markNewApiDir);
+        row++;
+        txtNewApiProbe = AddRow(grid, row, "NewAPI 探活地址", null, null, out markNewApiProbe);
+        row++;
+        txtSoVitsProbe = AddRow(grid, row, "SoVITS 探活地址", null, null, out markSoVits);
+        row++;
+        txtAdapterProbe = AddRow(grid, row, "适配器探活地址", null, null, out markAdapter);
+        row++;
+        Label markSession;
+        txtSession = AddRow(grid, row, "网关密钥（空=自动生成）", null, null, out markSession);
+        row++;
 
-        GroupBox grpOpt = new GroupBox();
-        grpOpt.Text = "行为";
-        grpOpt.AutoSize = true;
-        grpOpt.Dock = DockStyle.Top;
-        FlowLayoutPanel optFlow = new FlowLayoutPanel();
-        optFlow.Dock = DockStyle.Top;
-        optFlow.AutoSize = true;
-        optFlow.WrapContents = false;
+        grp.Controls.Add(grid);
+        return grp;
+    }
+
+    GroupBox BuildBehaviorGroup()
+    {
+        GroupBox grp = new GroupBox();
+        grp.Text = "行为（两个选项互斥）";
+        grp.AutoSize = true;
+        grp.Dock = DockStyle.Top;
+        FlowLayoutPanel flow = new FlowLayoutPanel();
+        flow.Dock = DockStyle.Top;
+        flow.AutoSize = true;
+        flow.WrapContents = false;
+
         chkAutoExit = new CheckBox();
         chkAutoExit.Text = "AIRI 关闭时自动退出并回收";
         chkAutoExit.AutoSize = true;
         chkKeep = new CheckBox();
         chkKeep.Text = "退出时保留服务运行";
         chkKeep.AutoSize = true;
+        // 互斥：勾选其一即取消另一个
+        chkAutoExit.CheckedChanged += delegate
+        {
+            if (chkAutoExit.Checked && chkKeep.Checked) chkKeep.Checked = false;
+        };
+        chkKeep.CheckedChanged += delegate
+        {
+            if (chkKeep.Checked && chkAutoExit.Checked) chkAutoExit.Checked = false;
+        };
+
         Label lblInt = new Label();
         lblInt.Text = "探活周期(秒)";
         lblInt.AutoSize = true;
@@ -162,23 +315,27 @@ class MainForm : Form
         numInterval.Minimum = 5;
         numInterval.Maximum = 300;
         numInterval.Value = 15;
-        optFlow.Controls.Add(chkAutoExit);
-        optFlow.Controls.Add(chkKeep);
-        optFlow.Controls.Add(lblInt);
-        optFlow.Controls.Add(numInterval);
-        grpOpt.Controls.Add(optFlow);
-        root.Controls.Add(grpOpt, 0, root.RowCount);
-        root.RowCount++;
 
-        GroupBox grpRun = new GroupBox();
-        grpRun.Text = "运行";
-        grpRun.AutoSize = true;
-        grpRun.Dock = DockStyle.Top;
-        FlowLayoutPanel runFlow = new FlowLayoutPanel();
-        runFlow.Dock = DockStyle.Top;
-        runFlow.AutoSize = true;
-        runFlow.WrapContents = false;
-        btnSave = new Button();
+        flow.Controls.Add(chkAutoExit);
+        flow.Controls.Add(chkKeep);
+        flow.Controls.Add(lblInt);
+        flow.Controls.Add(numInterval);
+        grp.Controls.Add(flow);
+        return grp;
+    }
+
+    GroupBox BuildRunGroup()
+    {
+        GroupBox grp = new GroupBox();
+        grp.Text = "运行";
+        grp.AutoSize = true;
+        grp.Dock = DockStyle.Top;
+        FlowLayoutPanel flow = new FlowLayoutPanel();
+        flow.Dock = DockStyle.Top;
+        flow.AutoSize = true;
+        flow.WrapContents = false;
+
+        Button btnSave = new Button();
         btnSave.Text = "保存配置";
         btnSave.Click += delegate { FieldsToCfg(); Furina.SaveIni(); Furina.Log("配置已保存到 furina.ini"); };
         btnStart = new Button();
@@ -190,33 +347,16 @@ class MainForm : Form
         btnStop.Enabled = false;
         btnStop.BackColor = Color.FromArgb(255, 199, 206);
         btnStop.Click += delegate { Furina.RequestStop(); };
-        runFlow.Controls.Add(btnSave);
-        runFlow.Controls.Add(btnStart);
-        runFlow.Controls.Add(btnStop);
-        runFlow.Controls.Add(MakeStatusLabel("NewAPI", out lblStNewApi));
-        runFlow.Controls.Add(MakeStatusLabel("SoVITS", out lblStSoVits));
-        runFlow.Controls.Add(MakeStatusLabel("适配器", out lblStAdapter));
-        runFlow.Controls.Add(MakeStatusLabel("AIRI", out lblStAiri));
-        grpRun.Controls.Add(runFlow);
-        root.Controls.Add(grpRun, 0, root.RowCount);
-        root.RowCount++;
 
-        txtLog = new TextBox();
-        txtLog.Dock = DockStyle.Fill;
-        txtLog.Multiline = true;
-        txtLog.ReadOnly = true;
-        txtLog.ScrollBars = ScrollBars.Vertical;
-        txtLog.BackColor = Color.FromArgb(30, 30, 30);
-        txtLog.ForeColor = Color.FromArgb(200, 200, 200);
-        txtLog.Font = new Font("Consolas", 9);
-
-        page.Controls.Add(txtLog);
-        page.Controls.Add(root);
-        txtLog.BringToFront();
-        txtLog.Dock = DockStyle.Bottom;
-        txtLog.Height = 170;
-        root.BringToFront();
-        return page;
+        flow.Controls.Add(btnSave);
+        flow.Controls.Add(btnStart);
+        flow.Controls.Add(btnStop);
+        flow.Controls.Add(MakeStatusLabel("NewAPI", out lblStNewApi));
+        flow.Controls.Add(MakeStatusLabel("SoVITS", out lblStSoVits));
+        flow.Controls.Add(MakeStatusLabel("适配器", out lblStAdapter));
+        flow.Controls.Add(MakeStatusLabel("AIRI", out lblStAiri));
+        grp.Controls.Add(flow);
+        return grp;
     }
 
     Control MakeStatusLabel(string name, out Label lbl)
@@ -230,7 +370,7 @@ class MainForm : Form
         return lbl;
     }
 
-    TextBox AddRow(TableLayoutPanel grid, int row, string label, string btnText, bool folder, EventHandler onBrowse)
+    TextBox AddRow(TableLayoutPanel grid, int row, string label, string btnText, EventHandler onBrowse, out Label mark)
     {
         grid.RowCount = row + 1;
         grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -240,10 +380,11 @@ class MainForm : Form
         lbl.Anchor = AnchorStyles.Left;
         lbl.Padding = new Padding(4, 6, 0, 0);
         grid.Controls.Add(lbl, 0, row);
+
         TextBox tb = new TextBox();
         tb.Dock = DockStyle.Fill;
-        tb.Margin = new Padding(3, 3, 3, 3);
         grid.Controls.Add(tb, 1, row);
+
         if (btnText != null)
         {
             Button btn = new Button();
@@ -252,6 +393,19 @@ class MainForm : Form
             btn.Click += onBrowse;
             grid.Controls.Add(btn, 2, row);
         }
+        else
+        {
+            Label filler = new Label();
+            grid.Controls.Add(filler, 2, row);
+        }
+
+        mark = new Label();
+        mark.Text = "";
+        mark.AutoSize = false;
+        mark.Size = new Size(24, 22);
+        mark.TextAlign = ContentAlignment.MiddleCenter;
+        mark.Font = new Font("Microsoft YaHei UI", 10, FontStyle.Bold);
+        grid.Controls.Add(mark, 3, row);
         return tb;
     }
 
@@ -271,6 +425,94 @@ class MainForm : Form
         if (dlg.ShowDialog(this) == DialogResult.OK) return dlg.SelectedPath;
         return null;
     }
+
+    // ---------------------------------------------------------------
+    // 校验
+    // ---------------------------------------------------------------
+
+    void HookTextChanged()
+    {
+        foreach (TextBox tb in new TextBox[] {
+            txtAiri, txtTtsBat, txtNewApiExe, txtNewApiDir,
+            txtNewApiProbe, txtSoVitsProbe, txtAdapterProbe, txtSession })
+        {
+            tb.TextChanged += delegate { validateTimer.Stop(); validateTimer.Start(); };
+        }
+    }
+
+    void SetMark(Label mark, bool? ok, string reason)
+    {
+        if (mark == null) return;
+        if (ok == null) { mark.Text = ""; toolTip.SetToolTip(mark, ""); return; }
+        mark.Text = ok.Value ? "✓" : "✗";
+        mark.ForeColor = ok.Value ? Color.FromArgb(0, 150, 60) : Color.FromArgb(210, 40, 40);
+        toolTip.SetToolTip(mark, reason);
+    }
+
+    void ValidateAll()
+    {
+        // AIRI：存在且文件名必须是 airi.exe
+        string airi = txtAiri.Text.Trim();
+        if (airi.Length == 0) SetMark(markAiri, null, "");
+        else if (!File.Exists(airi)) SetMark(markAiri, false, "文件不存在：" + airi);
+        else if (!string.Equals(Path.GetFileName(airi), "airi.exe", StringComparison.OrdinalIgnoreCase))
+            SetMark(markAiri, false, "文件存在，但文件名不是 airi.exe，请确认选对了 AIRI 主程序");
+        else SetMark(markAiri, true, "AIRI 主程序（静态校验通过；是否运行中见下方状态灯）");
+
+        // TTS 启动脚本：存在 + 可执行扩展名
+        string tts = txtTtsBat.Text.Trim();
+        string[] runExts = { ".bat", ".cmd", ".exe", ".ps1", ".vbs" };
+        if (tts.Length == 0) SetMark(markTts, null, "");
+        else if (!File.Exists(Furina.ResolvePath(tts))) SetMark(markTts, false, "文件不存在：" + Furina.ResolvePath(tts));
+        else if (Array.IndexOf(runExts, Path.GetExtension(tts).ToLowerInvariant()) < 0)
+            SetMark(markTts, false, "不是可执行的启动脚本（.bat/.cmd/.exe/.ps1/.vbs）");
+        else SetMark(markTts, true, "脚本存在（静态校验；能否正常拉起以启动后的状态灯为准）");
+
+        // NewAPI 程序：可空；通过校验才解锁网关相关三项
+        string napi = txtNewApiExe.Text.Trim();
+        bool napiOk = false;
+        if (napi.Length == 0) SetMark(markNewApi, null, "未配置 = 不使用网关");
+        else if (!File.Exists(napi)) SetMark(markNewApi, false, "文件不存在：" + napi);
+        else if (!string.Equals(Path.GetExtension(napi), ".exe", StringComparison.OrdinalIgnoreCase))
+            SetMark(markNewApi, false, "NewAPI 单文件版应为 .exe");
+        else { SetMark(markNewApi, true, "NewAPI 主程序"); napiOk = true; }
+
+        bool gatewayOn = napiOk; // 已验证才允许填写
+        txtNewApiDir.Enabled = gatewayOn;
+        txtNewApiProbe.Enabled = gatewayOn;
+        txtSession.Enabled = gatewayOn;
+        if (!gatewayOn)
+        {
+            SetMark(markNewApiDir, null, "");
+            SetMark(markNewApiProbe, null, "");
+        }
+        else
+        {
+            string dir = txtNewApiDir.Text.Trim();
+            SetMark(markNewApiDir,
+                dir.Length == 0 ? (bool?)null : Directory.Exists(dir),
+                dir.Length == 0 ? "" : (Directory.Exists(dir) ? "目录存在" : "目录不存在：" + dir));
+            SetMark(markNewApiProbe, ValidHttpUrl(txtNewApiProbe.Text.Trim()) ? (bool?)true : (bool?)false,
+                "形如 http://127.0.0.1:3000/api/status");
+        }
+
+        SetMark(markSoVits, ValidHttpUrl(txtSoVitsProbe.Text.Trim()) ? (bool?)true : (bool?)false,
+            "形如 http://127.0.0.1:9880/");
+        SetMark(markAdapter, ValidHttpUrl(txtAdapterProbe.Text.Trim()) ? (bool?)true : (bool?)false,
+            "形如 http://127.0.0.1:9881/health");
+    }
+
+    static bool ValidHttpUrl(string s)
+    {
+        if (s.Length == 0) return false;
+        Uri u;
+        return Uri.TryCreate(s, UriKind.Absolute, out u)
+            && (u.Scheme == Uri.UriSchemeHttp || u.Scheme == Uri.UriSchemeHttps);
+    }
+
+    // ---------------------------------------------------------------
+    // 配置与运行
+    // ---------------------------------------------------------------
 
     void FieldsFromCfg()
     {
@@ -339,24 +581,47 @@ class MainForm : Form
         }
     }
 
-    void RefreshStatus()
+    // ---------------------------------------------------------------
+    // 状态灯（后台线程探活，避免 HTTP 超时卡住界面）
+    // ---------------------------------------------------------------
+
+    void RefreshStatusAsync()
     {
-        if (Furina.NewApiEnabled)
+        if (probing) return;
+        probing = true;
+        ThreadPool.QueueUserWorkItem(delegate
         {
-            bool ok = Furina.Probe(Furina.cfg.NewApiProbe);
-            SetStatus(lblStNewApi, new Tuple<string, bool?>(ok ? "运行中" : "未响应", ok));
-        }
-        else
-        {
-            SetStatus(lblStNewApi, new Tuple<string, bool?>("未启用", null));
-        }
-        SetStatus(lblStSoVits, Status(Furina.cfg.SoVitsProbe));
-        SetStatus(lblStAdapter, Status(Furina.cfg.AdapterProbe));
-        bool airi = Process.GetProcessesByName("airi").Length > 0;
-        SetStatus(lblStAiri, new Tuple<string, bool?>(airi ? "运行中" : "未运行", airi));
+            try
+            {
+                Tuple<string, bool?> stNewApi, stSoVits, stAdapter, stAiri;
+                if (Furina.NewApiEnabled)
+                {
+                    bool ok = Furina.Probe(Furina.cfg.NewApiProbe);
+                    stNewApi = new Tuple<string, bool?>(ok ? "运行中" : "未响应", ok);
+                }
+                else stNewApi = new Tuple<string, bool?>("未启用", null);
+
+                stSoVits = ProbeStatus(Furina.cfg.SoVitsProbe);
+                stAdapter = ProbeStatus(Furina.cfg.AdapterProbe);
+                bool airi = Process.GetProcessesByName("airi").Length > 0;
+                stAiri = new Tuple<string, bool?>(airi ? "运行中" : "未运行", airi);
+
+                Ui(delegate
+                {
+                    SetStatus(lblStNewApi, stNewApi);
+                    SetStatus(lblStSoVits, stSoVits);
+                    SetStatus(lblStAdapter, stAdapter);
+                    SetStatus(lblStAiri, stAiri);
+                });
+            }
+            finally
+            {
+                probing = false;
+            }
+        });
     }
 
-    Tuple<string, bool?> Status(string url)
+    static Tuple<string, bool?> ProbeStatus(string url)
     {
         if (string.IsNullOrEmpty(url)) return new Tuple<string, bool?>("未配置", null);
         bool ok = Furina.Probe(url);
@@ -367,350 +632,8 @@ class MainForm : Form
     {
         string prefix = lbl.Text.Split(':')[0];
         lbl.Text = prefix + ": " + st.Item1;
-        lbl.BackColor = st.Item2 == null ? Color.LightGray : (st.Item2.Value ? Color.FromArgb(198, 239, 206) : Color.FromArgb(255, 199, 206));
-    }
-
-    // ---------------------------------------------------------------
-    // 角色卡页
-    // ---------------------------------------------------------------
-
-    TabPage BuildCardTab()
-    {
-        TabPage page = new TabPage("角色卡工具");
-        TableLayoutPanel root = new TableLayoutPanel();
-        root.Dock = DockStyle.Top;
-        root.AutoSize = true;
-        root.ColumnCount = 1;
-        root.Padding = new Padding(8);
-
-        GroupBox grpPack = new GroupBox();
-        grpPack.Text = "打包与备份（改卡流程：编辑 → 打包 → 到 AIRI 里重新导入并新开会话）";
-        grpPack.AutoSize = true;
-        grpPack.Dock = DockStyle.Top;
-        TableLayoutPanel grid = new TableLayoutPanel();
-        grid.Dock = DockStyle.Top;
-        grid.AutoSize = true;
-        grid.ColumnCount = 4;
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62));
-
-        grid.RowCount = 1;
-        grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        Label l1 = new Label();
-        l1.Text = "card.json";
-        l1.AutoSize = true;
-        l1.Padding = new Padding(4, 6, 0, 0);
-        grid.Controls.Add(l1, 0, 0);
-        txtCardJson = new TextBox();
-        txtCardJson.Dock = DockStyle.Fill;
-        grid.Controls.Add(txtCardJson, 1, 0);
-        Button bBrowse = new Button();
-        bBrowse.Text = "浏览";
-        bBrowse.Dock = DockStyle.Fill;
-        bBrowse.Click += delegate
-        {
-            string p = PickFile("选择角色卡源文件 card.json", "JSON|*.json");
-            if (p != null) txtCardJson.Text = p;
-        };
-        grid.Controls.Add(bBrowse, 2, 0);
-        btnEditCard = new Button();
-        btnEditCard.Text = "编辑";
-        btnEditCard.Dock = DockStyle.Fill;
-        btnEditCard.Click += delegate
-        {
-            string p = txtCardJson.Text.Trim();
-            if (!File.Exists(p)) { MessageBox.Show("card.json 不存在：" + p); return; }
-            try { Process.Start(p); } catch (Exception ex) { MessageBox.Show("打开编辑器失败: " + ex.Message); }
-        };
-        grid.Controls.Add(btnEditCard, 3, 0);
-
-        grid.RowCount = 2;
-        grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        Label l2 = new Label();
-        l2.Text = "输出卡包";
-        l2.AutoSize = true;
-        l2.Padding = new Padding(4, 6, 0, 0);
-        grid.Controls.Add(l2, 0, 1);
-        txtCardZip = new TextBox();
-        txtCardZip.Dock = DockStyle.Fill;
-        grid.Controls.Add(txtCardZip, 1, 1);
-        Button bBrowseZip = new Button();
-        bBrowseZip.Text = "浏览";
-        bBrowseZip.Dock = DockStyle.Fill;
-        bBrowseZip.Click += delegate
-        {
-            SaveFileDialog dlg = new SaveFileDialog();
-            dlg.Filter = "AIRI 角色卡|*.zip";
-            dlg.FileName = "芙宁娜·AIRI角色卡.zip";
-            if (dlg.ShowDialog(this) == DialogResult.OK) txtCardZip.Text = dlg.FileName;
-        };
-        grid.Controls.Add(bBrowseZip, 2, 1);
-        btnPack = new Button();
-        btnPack.Text = "打包";
-        btnPack.Dock = DockStyle.Fill;
-        btnPack.BackColor = Color.FromArgb(255, 235, 156);
-        btnPack.Click += delegate { PackCard(); };
-        grid.Controls.Add(btnPack, 3, 1);
-
-        grid.RowCount = 3;
-        grid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        lblPackResult = new Label();
-        lblPackResult.AutoSize = true;
-        lblPackResult.Padding = new Padding(4, 4, 0, 2);
-        lblPackResult.Text = " ";
-        grid.Controls.Add(lblPackResult, 0, 2);
-        grid.SetColumnSpan(lblPackResult, 4);
-        grpPack.Controls.Add(grid);
-        root.Controls.Add(grpPack, 0, root.RowCount);
-        root.RowCount++;
-
-        GroupBox grpTest = new GroupBox();
-        grpTest.Text = "验收测试（对当前 system_prompt 跑内置题库，人工核对元泄漏/节奏/黑话）";
-        grpTest.Dock = DockStyle.Fill;
-        TableLayoutPanel tgrid = new TableLayoutPanel();
-        tgrid.Dock = DockStyle.Top;
-        tgrid.AutoSize = true;
-        tgrid.ColumnCount = 4;
-        tgrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
-        tgrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
-        tgrid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
-        tgrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
-
-        tgrid.RowCount = 1;
-        tgrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        Label t1 = new Label();
-        t1.Text = "API 地址";
-        t1.AutoSize = true;
-        t1.Padding = new Padding(4, 6, 0, 0);
-        tgrid.Controls.Add(t1, 0, 0);
-        txtApiBase = new TextBox();
-        txtApiBase.Dock = DockStyle.Fill;
-        tgrid.Controls.Add(txtApiBase, 1, 0);
-        Label t2 = new Label();
-        t2.Text = "密钥";
-        t2.AutoSize = true;
-        t2.Padding = new Padding(4, 6, 0, 0);
-        tgrid.Controls.Add(t2, 2, 0);
-        txtApiKey = new TextBox();
-        txtApiKey.Dock = DockStyle.Fill;
-        txtApiKey.PasswordChar = '*';
-        tgrid.Controls.Add(txtApiKey, 3, 0);
-
-        tgrid.RowCount = 2;
-        tgrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        Label t3 = new Label();
-        t3.Text = "模型名";
-        t3.AutoSize = true;
-        t3.Padding = new Padding(4, 6, 0, 0);
-        tgrid.Controls.Add(t3, 0, 1);
-        txtModel = new TextBox();
-        txtModel.Dock = DockStyle.Fill;
-        tgrid.Controls.Add(txtModel, 1, 1);
-        btnTest = new Button();
-        btnTest.Text = "运行验收";
-        btnTest.Dock = DockStyle.Fill;
-        btnTest.BackColor = Color.FromArgb(198, 239, 206);
-        btnTest.Click += delegate { RunTests(); };
-        tgrid.Controls.Add(btnTest, 2, 1);
-        lblTestStatus = new Label();
-        lblTestStatus.AutoSize = true;
-        lblTestStatus.Padding = new Padding(4, 6, 0, 0);
-        lblTestStatus.Text = " ";
-        tgrid.Controls.Add(lblTestStatus, 3, 1);
-
-        tgrid.RowCount = 3;
-        tgrid.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        txtResults = new TextBox();
-        txtResults.Dock = DockStyle.Fill;
-        txtResults.Multiline = true;
-        txtResults.ReadOnly = true;
-        txtResults.ScrollBars = ScrollBars.Vertical;
-        txtResults.Height = 230;
-        tgrid.Controls.Add(txtResults, 0, 2);
-        tgrid.SetColumnSpan(txtResults, 4);
-        grpTest.Controls.Add(tgrid);
-        root.Controls.Add(grpTest, 0, root.RowCount);
-        root.RowCount++;
-
-        page.Controls.Add(root);
-        return page;
-    }
-
-    void PackCard()
-    {
-        string cardPath = txtCardJson.Text.Trim();
-        string zipPath = txtCardZip.Text.Trim();
-        if (!File.Exists(cardPath)) { MessageBox.Show("card.json 不存在：" + cardPath); return; }
-        if (string.IsNullOrEmpty(zipPath)) { MessageBox.Show("请填写输出卡包路径"); return; }
-        try
-        {
-            string dir = Path.GetDirectoryName(Path.GetFullPath(zipPath));
-            Directory.CreateDirectory(dir);
-            string backup = null;
-            if (File.Exists(zipPath))
-            {
-                backup = zipPath + "." + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".bak.zip";
-                File.Copy(zipPath, backup);
-            }
-            string manifestPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(cardPath)), "manifest.json");
-            using (FileStream fs = new FileStream(zipPath, FileMode.Create))
-            using (ZipArchive zip = new ZipArchive(fs, ZipArchiveMode.Create))
-            {
-                if (File.Exists(manifestPath))
-                {
-                    zip.CreateEntryFromFile(manifestPath, "manifest.json");
-                }
-                else
-                {
-                    ZipArchiveEntry me = zip.CreateEntry("manifest.json");
-                    using (StreamWriter w = new StreamWriter(me.Open(), new UTF8Encoding(false)))
-                        w.Write(DEFAULT_MANIFEST);
-                }
-                zip.CreateEntryFromFile(cardPath, "card.json");
-            }
-            string msg = "已打包：" + zipPath + (backup != null ? "\n旧包已备份：" + backup : "") +
-                "\n\n下一步：到 AIRI 设置里重新导入卡包，并【新开会话】生效。";
-            lblPackResult.Text = DateTime.Now.ToString("HH:mm:ss") + " 打包完成" + (backup != null ? "（旧包已备份）" : "");
-            MessageBox.Show(msg, "打包完成");
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show("打包失败: " + ex.Message);
-        }
-    }
-
-    void RunTests()
-    {
-        string cardPath = txtCardJson.Text.Trim();
-        if (!File.Exists(cardPath)) { MessageBox.Show("card.json 不存在：" + cardPath); return; }
-        string sysPrompt = ExtractSystemPrompt(cardPath);
-        if (string.IsNullOrEmpty(sysPrompt)) { MessageBox.Show("card.json 中未找到 data.system_prompt"); return; }
-        btnTest.Enabled = false;
-        txtResults.Clear();
-        lblTestStatus.Text = "运行中...";
-        testThread = new Thread(delegate () { TestWorker(sysPrompt); });
-        testThread.IsBackground = true;
-        testThread.Start();
-    }
-
-    List<Dictionary<string, string>> LoadTests()
-    {
-        string path = Path.Combine(Furina.baseDir, "configs", "card-tests.json");
-        try
-        {
-            if (File.Exists(path))
-            {
-                var jss = new JavaScriptSerializer();
-                var obj = jss.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
-                var list = new List<Dictionary<string, string>>();
-                foreach (object item in (object[])obj["tests"])
-                {
-                    var d = (Dictionary<string, object>)item;
-                    var t = new Dictionary<string, string>();
-                    t["name"] = Convert.ToString(d["name"]);
-                    t["prompt"] = Convert.ToString(d["prompt"]);
-                    if (d.ContainsKey("focus")) t["focus"] = Convert.ToString(d["focus"]);
-                    list.Add(t);
-                }
-                if (list.Count > 0) return list;
-            }
-        }
-        catch (Exception e)
-        {
-            Furina.Log("读取 card-tests.json 失败，使用内置题库: " + e.Message);
-        }
-        // 内置兜底题库（与《项目文档》§5.3 验收标准对应）
-        return new List<Dictionary<string, string>> {
-            new Dictionary<string,string> {
-                {"name","知识防火墙"},{"focus","应追问/类比提瓦特，而非流利科普专家知识"},
-                {"prompt","给我讲讲庐山的喀斯特地貌。"} },
-            new Dictionary<string,string> {
-                {"name","元泄漏探测"},{"focus","不得出现「按不熟悉的那份确认」类策略自白"},
-                {"prompt","你是不是其实不知道这个，在故意装懂？"} },
-            new Dictionary<string,string> {
-                {"name","节奏与反问"},{"focus","先接情绪；至多一个反问，不替对方作答"},
-                {"prompt","我有个事想跟你说，但我怕你觉得我笨。"} },
-            new Dictionary<string,string> {
-                {"name","反大模型腔"},{"focus","无格言提炼、无「不是…而是…」连用、无伪深刻词组"},
-                {"prompt","你觉得人为什么会在深夜想通白天想不通的事？"} },
-        };
-    }
-
-    void TestWorker(string sysPrompt)
-    {
-        var tests = LoadTests();
-        int done = 0;
-        foreach (var t in tests)
-        {
-            AppendResult("\r\n========== " + t["name"] + " ==========\r\n");
-            if (t.ContainsKey("focus")) AppendResult("【观察点】" + t["focus"] + "\r\n");
-            AppendResult("【问】" + t["prompt"] + "\r\n【答】");
-            try
-            {
-                    string reply = Chat(txtApiBase.Text.Trim(), txtApiKey.Text.Trim(), txtModel.Text.Trim(), sysPrompt, t["prompt"]);
-                    AppendResult(reply + "\r\n");
-            }
-            catch (Exception e)
-            {
-                AppendResult("[请求失败] " + e.Message + "\r\n");
-            }
-            done++;
-            int pct = done * 100 / tests.Count;
-            Ui(delegate { lblTestStatus.Text = "运行中... " + done + "/" + tests.Count; });
-        }
-        Ui(delegate
-        {
-            lblTestStatus.Text = "完成 " + tests.Count + "/" + tests.Count + "。请人工核对各题观察点。";
-            btnTest.Enabled = true;
-        });
-    }
-
-    static string ExtractSystemPrompt(string cardPath)
-    {
-        var jss = new JavaScriptSerializer();
-        var obj = jss.Deserialize<Dictionary<string, object>>(File.ReadAllText(cardPath, Encoding.UTF8));
-        if (obj.ContainsKey("data"))
-        {
-            var data = obj["data"] as Dictionary<string, object>;
-            if (data != null && data.ContainsKey("system_prompt"))
-                return Convert.ToString(data["system_prompt"]);
-        }
-        if (obj.ContainsKey("system_prompt"))
-            return Convert.ToString(obj["system_prompt"]);
-        return "";
-    }
-
-    static string Chat(string baseUrl, string key, string model, string system, string user)
-    {
-        var jss = new JavaScriptSerializer();
-        var body = new Dictionary<string, object>();
-        body["model"] = model;
-        body["temperature"] = 0.8;
-        body["stream"] = false;
-        body["messages"] = new object[] {
-            new Dictionary<string,object> { {"role","system"}, {"content",system} },
-            new Dictionary<string,object> { {"role","user"}, {"content",user} },
-        };
-        string payload = jss.Serialize(body);
-        HttpWebRequest req = (HttpWebRequest)WebRequest.Create(baseUrl.TrimEnd('/') + "/chat/completions");
-        req.Method = "POST";
-        req.ContentType = "application/json; charset=utf-8";
-        req.Timeout = 180000;
-        req.ReadWriteTimeout = 180000;
-        if (!string.IsNullOrEmpty(key)) req.Headers["Authorization"] = "Bearer " + key;
-        byte[] bytes = Encoding.UTF8.GetBytes(payload);
-        using (Stream s = req.GetRequestStream()) s.Write(bytes, 0, bytes.Length);
-        using (WebResponse resp = req.GetResponse())
-        using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
-        {
-            var obj = jss.Deserialize<Dictionary<string, object>>(sr.ReadToEnd());
-            var choices = (object[])obj["choices"];
-            var c0 = (Dictionary<string, object>)choices[0];
-            var msg = (Dictionary<string, object>)c0["message"];
-            return Convert.ToString(msg["content"]);
-        }
+        lbl.BackColor = st.Item2 == null ? Color.LightGray
+            : (st.Item2.Value ? Color.FromArgb(198, 239, 206) : Color.FromArgb(255, 199, 206));
     }
 
     // ---------------------------------------------------------------
@@ -729,11 +652,6 @@ class MainForm : Form
             if (txtLog.TextLength > 60000) txtLog.Clear();
             txtLog.AppendText(line + "\r\n");
         });
-    }
-
-    void AppendResult(string text)
-    {
-        Ui(delegate { txtResults.AppendText(text); });
     }
 
     void OnCoreLog(string line)

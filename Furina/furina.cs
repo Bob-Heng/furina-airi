@@ -63,6 +63,9 @@ public class Furina
     public static string logFile;
     static Process airiProc;
     static bool airiAdopted;
+    // 组件"就绪过一次"标记：就绪前享有加载宽限，就绪后掉线立刻计数重拉
+    static bool sovitsEverReady = false;
+    static bool adapterEverReady = false;
     static DateTime ttsLastStart = DateTime.MinValue;
     static bool tornDown = true;   // 开始时视为"已回收"，RunAll 前由 ResetState 复位
     static volatile bool closing = false;
@@ -301,12 +304,69 @@ public class Furina
             psi.CreateNoWindow = true;
             Process.Start(psi);
             ttsLastStart = DateTime.Now;
+            sovitsEverReady = false;
+            adapterEverReady = false;
             Log("已执行 TTS 启动脚本（内部探活并拉起 SoVITS + 适配器）");
+            DeprioritizeNewPython();
         }
         catch (Exception e)
         {
             Log("TTS 服务启动失败: " + e.Message);
         }
+    }
+
+    // SoVITS 导入 torch/加载模型期间 CPU 与磁盘满载，会拖垮整个桌面的交互响应。
+    // 这里对"本次新启动的 python 进程"临时降优先级，保护前端；组件就绪后由
+    // 看门狗恢复为 Normal（见 WatchdogLoop）。
+    static void DeprioritizeNewPython()
+    {
+        try
+        {
+            HashSet<int> before = PidsByImage("python");
+            new Thread(delegate ()
+            {
+                try
+                {
+                    Thread.Sleep(4000);
+                    foreach (int pid in PidsByImage("python"))
+                    {
+                        if (before.Contains(pid)) continue;
+                        try { Process.GetProcessById(pid).PriorityClass = ProcessPriorityClass.BelowNormal; }
+                        catch { }
+                    }
+                }
+                catch { }
+            }) { IsBackground = true }.Start();
+        }
+        catch { }
+    }
+
+    static HashSet<int> PidsByImage(string name)
+    {
+        HashSet<int> set = new HashSet<int>();
+        try
+        {
+            foreach (Process p in Process.GetProcessesByName(name))
+            {
+                try { set.Add(p.Id); } catch { }
+            }
+        }
+        catch { }
+        return set;
+    }
+
+    // 按端口找监听进程并设置优先级（用于组件就绪后恢复 Normal）
+    static void SetPriorityByPort(int port, ProcessPriorityClass cls)
+    {
+        try
+        {
+            foreach (int pid in FindPidsByPort(port))
+            {
+                try { Process.GetProcessById(pid).PriorityClass = cls; }
+                catch { }
+            }
+        }
+        catch { }
     }
 
     static void EnsureAiri()
@@ -381,8 +441,9 @@ public class Furina
         catch { }
     }
 
-    static void KillByPort(int port)
+    static HashSet<int> FindPidsByPort(int port)
     {
+        HashSet<int> pids = new HashSet<int>();
         try
         {
             ProcessStartInfo psi = new ProcessStartInfo(
@@ -393,7 +454,6 @@ public class Furina
             Process p = Process.Start(psi);
             string output = p.StandardOutput.ReadToEnd();
             p.WaitForExit(5000);
-            HashSet<int> pids = new HashSet<int>();
             foreach (string raw in output.Split('\n'))
             {
                 string line = raw.Trim();
@@ -403,10 +463,16 @@ public class Furina
                 int pid;
                 if (int.TryParse(parts[parts.Length - 1], out pid)) pids.Add(pid);
             }
-            foreach (int pid in pids) KillTree(pid);
-            if (pids.Count > 0) Log("端口 " + port + " 已回收 " + pids.Count + " 个进程");
         }
         catch { }
+        return pids;
+    }
+
+    static void KillByPort(int port)
+    {
+        HashSet<int> pids = FindPidsByPort(port);
+        foreach (int pid in pids) KillTree(pid);
+        if (pids.Count > 0) Log("端口 " + port + " 已回收 " + pids.Count + " 个进程");
     }
 
     public static void Teardown()
@@ -450,6 +516,8 @@ public class Furina
         stopRequested = false;
         airiProc = null;
         airiAdopted = false;
+        sovitsEverReady = false;
+        adapterEverReady = false;
         ttsLastStart = DateTime.MinValue;
         FinalizePaths();
     }
@@ -544,20 +612,38 @@ public class Furina
                     }
                 }
 
-                // SoVITS 模型加载期不判死
-                if ((DateTime.Now - ttsLastStart).TotalSeconds > cfg.TtsWarmupGraceSec)
+                // 探活始终进行；但只有"组件曾就绪过"或"加载宽限已过"才累计失败次数——
+                // 杜绝"加载期被误重拉"与"运行期掉线被宽限掩盖"两类问题
+                bool graceOver = (DateTime.Now - ttsLastStart).TotalSeconds > cfg.TtsWarmupGraceSec;
+                bool s = Probe(cfg.SoVitsProbe);
+                bool a = Probe(cfg.AdapterProbe);
+                if (s)
                 {
-                    bool s = Probe(cfg.SoVitsProbe);
-                    bool a = Probe(cfg.AdapterProbe);
-                    if (s) sovitsFails = 0; else sovitsFails++;
-                    if (a) adapterFails = 0; else adapterFails++;
-                    if (sovitsFails >= cfg.FailRestartThreshold || adapterFails >= cfg.FailRestartThreshold)
+                    if (!sovitsEverReady)
                     {
-                        Log("语音服务连续探活失败（SoVITS #" + sovitsFails + " / 适配器 #" + adapterFails + "），重新拉起");
-                        sovitsFails = 0;
-                        adapterFails = 0;
-                        StartTts();
+                        sovitsEverReady = true;
+                        SetPriorityByPort(9880, ProcessPriorityClass.Normal);
+                        Log("SoVITS 首次就绪，进程优先级恢复 Normal");
                     }
+                    sovitsFails = 0;
+                }
+                else if (sovitsEverReady || graceOver) sovitsFails++;
+                if (a)
+                {
+                    if (!adapterEverReady)
+                    {
+                        adapterEverReady = true;
+                        SetPriorityByPort(9881, ProcessPriorityClass.Normal);
+                    }
+                    adapterFails = 0;
+                }
+                else if (adapterEverReady || graceOver) adapterFails++;
+                if (sovitsFails >= cfg.FailRestartThreshold || adapterFails >= cfg.FailRestartThreshold)
+                {
+                    Log("语音服务连续探活失败（SoVITS #" + sovitsFails + " / 适配器 #" + adapterFails + "），重新拉起");
+                    sovitsFails = 0;
+                    adapterFails = 0;
+                    StartTts();
                 }
             }
             Thread.Sleep(1000);
