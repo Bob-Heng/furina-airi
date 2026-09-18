@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>芙宁娜项目 · 运行状态机</title>
+<style>
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: var(--kimi-font-sans, sans-serif); }
+  button, input, select, textarea { font: inherit; }
+  svg text { font-family: var(--kimi-font-sans, sans-serif); }
+
+  .wrap {
+    width: 100%;
+    padding-block-start: var(--kimi-space-4);
+    padding-inline: var(--kimi-space-4);
+    padding-block-end: var(--kimi-space-4);
+    box-sizing: border-box;
+  }
+  .title { font-size: 17px; font-weight: 500; margin: 0 0 var(--kimi-space-1); }
+  .subtitle { color: var(--kimi-color-text-tertiary); font-size: 12px; margin: 0 0 var(--kimi-space-4); }
+
+  .lane { border: 1px solid var(--kimi-color-border); border-radius: var(--kimi-radius-panel); padding: var(--kimi-space-3); margin-bottom: var(--kimi-space-3); }
+  .lane-head { display: flex; align-items: baseline; gap: var(--kimi-space-2); margin-bottom: var(--kimi-space-3); flex-wrap: wrap; }
+  .lane-title { font-size: 14px; font-weight: 500; }
+  .lane-scope { font-size: 12px; color: var(--kimi-color-text-tertiary); }
+
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; row-gap: var(--kimi-space-2); }
+  .st {
+    font-size: 12px; line-height: 1.35;
+    border: 1px solid var(--kimi-color-border);
+    border-radius: var(--kimi-radius-input);
+    padding: 4px 8px;
+    color: var(--kimi-color-text-primary);
+    background: transparent;
+    max-width: 200px;
+  }
+  .st small { display: block; font-size: 11px; color: var(--kimi-color-text-tertiary); font-weight: 400; }
+  .st--ok    { border-color: color-mix(in srgb, var(--kimi-color-positive) 55%, transparent); background: color-mix(in srgb, var(--kimi-color-positive) 10%, transparent); }
+  .st--warn  { border-color: color-mix(in srgb, var(--kimi-color-warning) 55%, transparent); background: color-mix(in srgb, var(--kimi-color-warning) 12%, transparent); }
+  .st--bad   { border-color: color-mix(in srgb, var(--kimi-color-danger) 55%, transparent); background: color-mix(in srgb, var(--kimi-color-danger) 10%, transparent); }
+  .st--start { border-style: dashed; color: var(--kimi-color-text-secondary); }
+  .arr { color: var(--kimi-color-text-quaternary); font-size: 12px; flex: 0 0 auto; }
+  .arr-lab { display: flex; flex-direction: column; align-items: center; flex: 0 0 auto; }
+  .arr-lab span { font-size: 11px; color: var(--kimi-color-text-tertiary); white-space: nowrap; }
+  .arr-lab i { font-style: normal; color: var(--kimi-color-text-quaternary); font-size: 12px; }
+
+  .loop { font-size: 11px; color: var(--kimi-color-text-tertiary); margin-top: var(--kimi-space-2); }
+  .legend { display: flex; gap: var(--kimi-space-3); flex-wrap: wrap; font-size: 12px; color: var(--kimi-color-text-tertiary); margin-top: var(--kimi-space-1); }
+  .legend b { font-weight: 400; display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; border: 1px solid var(--kimi-color-border); }
+  .dot--ok { border-color: color-mix(in srgb, var(--kimi-color-positive) 55%, transparent); background: color-mix(in srgb, var(--kimi-color-positive) 10%, transparent); }
+  .dot--warn { border-color: color-mix(in srgb, var(--kimi-color-warning) 55%, transparent); background: color-mix(in srgb, var(--kimi-color-warning) 12%, transparent); }
+  .dot--bad { border-color: color-mix(in srgb, var(--kimi-color-danger) 55%, transparent); background: color-mix(in srgb, var(--kimi-color-danger) 10%, transparent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 class="title">芙宁娜项目 · 运行状态机</h1>
+  <p class="subtitle">AIRI（意识/舞台）＋ NewAPI 网关（3000）＋ DeepSeek ＋ TTS 适配器（9881）＋ GPT-SoVITS（9880）</p>
+
+  <!-- A. 启动层 -->
+  <section class="lane">
+    <div class="lane-head"><span class="lane-title">A · 启动层</span><span class="lane-scope">每次开机：Startup 文件夹 VBS → 启动芙宁娜语音服务.bat</span></div>
+    <div class="flow">
+      <span class="st st--start">关机 / 未启动</span>
+      <span class="arr-lab"><span>开机自启</span><i>→</i></span>
+      <span class="st">探测端口<small>curl 9880 / 9881，超时即死</small></span>
+      <span class="arr-lab"><span>存活 → 跳过</span><i>→</i></span>
+      <span class="st st--ok">就绪待命<small>等 AIRI 连接</small></span>
+    </div>
+    <div class="flow" style="margin-top:6px">
+      <span class="st">探测端口</span>
+      <span class="arr-lab"><span>无响应</span><i>→</i></span>
+      <span class="st st--warn">清理残留进程<small>taskkill 占口 PID</small></span>
+      <span class="arr">→</span>
+      <span class="st">拉起服务<small>SoVITS ＋ 适配器</small></span>
+      <span class="arr">→</span>
+      <span class="st">模型加载<small>权重上卡，约 1 分钟</small></span>
+      <span class="arr">→</span>
+      <span class="st st--ok">就绪待命</span>
+    </div>
+    <p class="loop">自愈合环：运行中崩溃 → 下次手动跑 bat 或重启电脑 → 回到「探测端口」。首句合成约 19 s（冷启动建会话），之后热机约 4 s/句。</p>
+  </section>
+
+  <!-- B. 对话层 -->
+  <section class="lane">
+    <div class="lane-head"><span class="lane-title">B · 对话层</span><span class="lane-scope">AIRI 内的一轮对话</span></div>
+    <div class="flow">
+      <span class="st st--start">空闲</span>
+      <span class="arr-lab"><span>你开口</span><i>→</i></span>
+      <span class="st">LLM 生成<small>网关 :3000 → DeepSeek，角色卡 v2.2 约束</small></span>
+      <span class="arr-lab"><span>流式回复</span><i>→</i></span>
+      <span class="st">解析舞台指令<small>ACT → 表情/动作；按句号断句</small></span>
+      <span class="arr">→</span>
+      <span class="st">逐句请求语音<small>POST :9881/v1/audio/speech</small></span>
+      <span class="arr">→</span>
+      <span class="st st--ok">排队播放<small>你听到她说话</small></span>
+      <span class="arr-lab"><span>播完</span><i>→</i></span>
+      <span class="st st--start">空闲</span>
+    </div>
+  </section>
+
+  <!-- C. 适配器 -->
+  <section class="lane">
+    <div class="lane-head"><span class="lane-title">C · 语音适配器</span><span class="lane-scope">每一句话的合成决策（对话层每句都走一遍）</span></div>
+    <div class="flow">
+      <span class="st st--start">接收请求</span>
+      <span class="arr">→</span>
+      <span class="st">清洗文本<small>剥舞台残留、边缘标点、孤悬破折号</small></span>
+      <span class="arr-lab"><span>纯标点/空</span><i>→</i></span>
+      <span class="st">0.3 s 静默<small>不送合成，防怪声</small></span>
+      <span class="arr">→</span>
+      <span class="st st--ok">返回</span>
+    </div>
+    <div class="flow" style="margin-top:6px">
+      <span class="st">清洗后文本</span>
+      <span class="arr-lab"><span>≤5 字</span><i>→</i></span>
+      <span class="st">短句规则<small>固定清晰参考音，防气声塌缩</small></span>
+      <span class="arr">→</span>
+      <span class="st">合成</span>
+    </div>
+    <div class="flow" style="margin-top:6px">
+      <span class="st">清洗后文本</span>
+      <span class="arr-lab"><span>普通句</span><i>→</i></span>
+      <span class="st">情绪判定<small>soft / calm / bright 信号词</small></span>
+      <span class="arr">→</span>
+      <span class="st">选参考音<small>15 s 粘性窗口内沿用，否则轮换（跳过黑名单）</small></span>
+      <span class="arr">→</span>
+      <span class="st">SoVITS 合成<small>POST :9880/tts</small></span>
+    </div>
+    <div class="flow" style="margin-top:6px">
+      <span class="st">合成结果</span>
+      <span class="arr-lab"><span>失败（如参考音超 10 s 被 400）</span><i>→</i></span>
+      <span class="st st--warn">拉黑该参考音<small>进程级，重启复位</small></span>
+      <span class="arr">→</span>
+      <span class="st st--warn">兜底参考音重试</span>
+      <span class="arr-lab"><span>再失败</span><i>→</i></span>
+      <span class="st st--bad">502<small>该句无声（设计上的最后兜底）</small></span>
+    </div>
+    <div class="flow" style="margin-top:6px">
+      <span class="st">合成成功</span>
+      <span class="arr-lab"><span>时长 &lt; 0.2 s/字</span><i>→</i></span>
+      <span class="st st--warn">疑似塌成气声 → 兜底重试</span>
+    </div>
+    <div class="flow" style="margin-top:6px">
+      <span class="st">合成成功且时长正常</span>
+      <span class="arr">→</span>
+      <span class="st">补静默<small>头 0.10 s ＋ 尾 0.28 s，句间气口</small></span>
+      <span class="arr">→</span>
+      <span class="st st--ok">返回 wav → AIRI 播放</span>
+    </div>
+  </section>
+
+  <!-- D. 参考音生命周期 -->
+  <section class="lane">
+    <div class="lane-head"><span class="lane-title">D · 参考音生命周期</span><span class="lane-scope">8 条平静语音组成的轮换池（ref_pool.json）</span></div>
+    <div class="flow">
+      <span class="st st--start">池中的参考音</span>
+      <span class="arr-lab"><span>启动校验：时长 3~10 s</span><i>→</i></span>
+      <span class="st st--ok">在役轮换</span>
+      <span class="arr">⇄</span>
+      <span class="st">粘性占用<small>同一轮对话 15 s 内复用，防一句一个腔调</small></span>
+      <span class="arr">→</span>
+      <span class="st st--ok">回池</span>
+    </div>
+    <div class="flow" style="margin-top:6px">
+      <span class="st">池中参考音</span>
+      <span class="arr-lab"><span>时长越界</span><i>→</i></span>
+      <span class="st st--bad">启动即剔除<small>并写日志</small></span>
+      <span class="arr" style="visibility:hidden">→→</span>
+      <span class="st">在役参考音</span>
+      <span class="arr-lab"><span>合成失败一次</span><i>→</i></span>
+      <span class="st st--bad">进程级拉黑<small>重启适配器后复位重审</small></span>
+    </div>
+  </section>
+
+  <div class="legend">
+    <b><span class="dot"></span>普通状态</b>
+    <b><span class="dot dot--ok"></span>就绪 / 成功路径</b>
+    <b><span class="dot dot--warn"></span>降级 / 重试</b>
+    <b><span class="dot dot--bad"></span>故障终点</b>
+    <b>虚线框 = 起止状态</b>
+  </div>
+</div>
+</body>
+</html>

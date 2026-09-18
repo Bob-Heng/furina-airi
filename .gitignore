@@ -1,0 +1,39 @@
+# ============ 本机私有：绝不入库 ============
+# 本机配置（含路径与密钥）
+Furina/furina.ini
+Furina/logs/
+Furina/configs/newapi/
+# 本机私有归档（含机器路径与本地令牌，仅本机保留）
+Furina/configs/airi/
+Furina/configs/startup/
+
+# 大体积第三方与运行环境
+GPT-SoVITS-main/
+sovits-venv/
+_test/
+
+# 版权资产（游戏语音/模型/权重/动作，仓库不提供）
+语音/slice_in/
+语音/sliced/
+语音/refs/
+语音/回归试听/
+语音/*.log
+黑芙模型包/
+【芙宁娜】_by_*/
+动作/
+黑芙_芙宁娜_荒_v3.zip
+
+# 构建产物与备份
+Furina/furina.exe
+芙宁娜·AIRI角色卡*.zip
+
+# 私密与存档
+聊天记录存档点/
+众水纪行/*.psd
+# 设定汇编含游戏原文编译，仅本机参考用，不公开放出
+众水纪行/
+*.tmp
+
+# 系统垃圾
+Thumbs.db
+desktop.ini

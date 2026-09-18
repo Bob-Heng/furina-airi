@@ -1,0 +1,44 @@
+# ============================================================
+# 芙宁娜整合启动器配置（与 furina.exe 同目录）
+# 修改后重启 furina.exe 生效。
+#   - 行首 # 或 ; 为注释；[xxx] 为分节标题
+#   - 相对路径基于本文件所在目录（Furina\）
+#   - NewApiExe 留空 = 不使用网关（AIRI/适配器直连你的端点）
+# 本文件是示例；把本文件复制为 furina.ini 并填入你本机的路径。
+# ============================================================
+
+[paths]
+# AIRI 桌面宠物主程序（必配，界面上点「浏览」选择）
+AiriExe=
+
+# 语音服务启动 bat（默认用仓库自带的方案；接自己的 TTS 就换成你的启动脚本，
+# 并把下方两个探活地址指向你的服务）
+TtsBat=..\启动芙宁娜语音服务.bat
+SoVitsProbe=http://127.0.0.1:9880/
+AdapterProbe=http://127.0.0.1:9881/health
+
+# NewAPI 网关（可选；需要本地网关转发/托管密钥时配置）
+NewApiExe=
+NewApiDir=
+NewApiProbe=http://127.0.0.1:3000/api/status
+# 网关会话密钥；留空则首次启动自动生成随机密钥并写回本文件
+SessionSecret=
+
+# NewAPI 的 SQLite 库（留空 = NewApiDir\one-api.db；启动时自动备份，保留 10 份）
+OneApiDb=
+
+[dirs]
+LogDir=logs
+BackupDir=configs\newapi
+
+[watchdog]
+# 探活周期（秒）
+ProbeIntervalSec=15
+# 连续失败多少次后重拉
+FailRestartThreshold=3
+# SoVITS 模型加载宽限期（秒内不判死）
+TtsWarmupGraceSec=180
+# AIRI 关闭后，启动器是否跟着退出（并回收本地服务）
+AutoExitWithAiri=true
+# 退出时是否保留 NewAPI/语音服务运行（默认 false：退出即全部停止）
+KeepServicesOnExit=false
