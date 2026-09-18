@@ -265,6 +265,42 @@ def _synthesize(text, ref):
     return wav, dur
 
 
+# 上游宕机恢复窗口：连接级失败（服务重启中）时原地等待重试的最长时间
+UPSTREAM_WAIT_SEC = 75.0
+UPSTREAM_RETRY_EVERY = 5.0
+
+
+def _synthesize_resilient(text, ref):
+    """带恢复的合成。
+
+    - HTTP 4xx/5xx（参考音被 SoVITS 拒绝等）：拉黑该参考音，换兜底音重试；
+    - 连接级失败（ConnectionRefused/超时等，即语音服务正在重启）：
+      原地等待、按固定间隔重试，**不拉黑参考音**——掉线不是参考音的错。
+      恢复后当前这句照常合成返回，AIRI 从断点继续播放。
+    """
+    t0 = time.time()
+    while True:
+        try:
+            return _synthesize(text, ref)
+        except urllib.error.HTTPError as e:
+            _log('HTTP %s with ref %s -> blacklist & fallback' % (
+                e.code, os.path.basename(ref['path'])))
+            _BAD_REFS.add(ref['abs_path'])
+            fb = next((r for r in _GROUP_REFS['calm']
+                       if r['abs_path'] not in _BAD_REFS), None)
+            if fb is None or fb['abs_path'] == ref['abs_path']:
+                raise
+            ref = fb
+            continue
+        except Exception as e:
+            elapsed = time.time() - t0
+            if elapsed > UPSTREAM_WAIT_SEC:
+                raise
+            _log('upstream unreachable (%.0fs), waiting for restart: %s' % (
+                elapsed, type(e).__name__))
+            time.sleep(UPSTREAM_RETRY_EVERY)
+
+
 class H(BaseHTTPRequestHandler):
     def end_headers(self):
         # AIRI 渲染进程（file:// 来源）fetch 本会触发 CORS 预检，必须放行
@@ -327,25 +363,15 @@ class H(BaseHTTPRequestHandler):
             ref, mood, sticky = _pick_ref(text)
             t0 = time.time()
             try:
-                wav, dur = _synthesize(text, ref)
+                wav, dur = _synthesize_resilient(text, ref)
             except Exception as e:
-                # 参考音出问题（如被 SoVITS 拒绝）→ 拉黑 + 用兜底参考音重试一次，
-                # 绝不让一整段回复因为一条坏参考音而无声。
-                _log('ERROR with ref %s: %s -> blacklist & retry' % (
-                    os.path.basename(ref['path']), e))
-                _BAD_REFS.add(ref['abs_path'])
-                fallback = next(
-                    (r for r in _GROUP_REFS['calm'] if r['abs_path'] not in _BAD_REFS),
-                    None)
-                if fallback is None:
-                    self._send_json(502, {'error': f'upstream GPT-SoVITS failed: {e}'})
-                    return
-                ref, sticky = fallback, False
-                wav, dur = _synthesize(text, ref)
+                _log('ERROR: %s' % e)
+                self._send_json(502, {'error': f'upstream GPT-SoVITS failed: {e}'})
+                return
             # 时长合理性检查：合成结果相对字数明显偏短，多半是塌成了气声/吞字，
-            # 换兜底参考音重试一次。
+            # 换兜底参考音重试一次。留 0.08s 余量，避免边界值（如 2.0s<2.0s）误触发。
             min_dur = max(0.6, 0.20 * _hanzi_count(text))
-            if dur < min_dur:
+            if dur < min_dur - 0.08:
                 fallback = next(
                     (r for r in _GROUP_REFS['calm']
                      if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),

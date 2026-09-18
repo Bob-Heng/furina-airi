@@ -211,7 +211,15 @@ public class Furina
         }
     }
 
+    enum ProbeResult { Alive, Refused, Timeout }
+
     public static bool Probe(string url)
+    {
+        return ProbeDetailed(url) == ProbeResult.Alive;
+    }
+
+    // 区分"拒绝连接"（进程死了，可安全重拉）与"超时"（服务在忙合成，绝不能误杀）
+    static ProbeResult ProbeDetailed(string url)
     {
         try
         {
@@ -221,18 +229,28 @@ public class Furina
             req.ReadWriteTimeout = 5000;
             using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
             {
-                return true;
+                return ProbeResult.Alive;
             }
         }
         catch (WebException we)
         {
-            // 收到了 HTTP 响应（哪怕 404/500）就说明服务活着
-            return we.Response != null;
+            if (we.Response != null) return ProbeResult.Alive;
+            if (we.Status == WebExceptionStatus.Timeout
+                || we.Status == WebExceptionStatus.ReceiveFailure) return ProbeResult.Timeout;
+            return ProbeResult.Refused;
         }
         catch
         {
-            return false;
+            return ProbeResult.Refused;
         }
+    }
+
+    static DateTime lastBusyLog = DateTime.MinValue;
+    static void LogBusyOnce(string who)
+    {
+        if ((DateTime.Now - lastBusyLog).TotalSeconds < 60) return;
+        lastBusyLog = DateTime.Now;
+        Log(who + " 探活超时（正在合成，判定为忙），暂不干预");
     }
 
     static bool WaitForProbe(string url, int timeoutSec, string label)
@@ -428,6 +446,31 @@ public class Furina
         }
     }
 
+    // 掉线恢复后读取适配器日志，汇报近 10 分钟掉线窗口内的合成失败数量
+    static void ReportOutageWindow()
+    {
+        try
+        {
+            string logPath = Path.Combine(
+                Path.GetDirectoryName(ResolvePath(cfg.TtsBat)), @"语音\adapter.log");
+            if (!File.Exists(logPath)) return;
+            string[] lines = File.ReadAllLines(logPath, Encoding.UTF8);
+            DateTime cutoff = DateTime.Now.AddMinutes(-10);
+            int errors = 0;
+            for (int i = lines.Length - 1; i >= 0; i--)
+            {
+                if (lines[i].Length < 20) continue;
+                DateTime ts;
+                if (!DateTime.TryParse(lines[i].Substring(0, 19), out ts)) continue;
+                if (ts < cutoff) break;
+                if (lines[i].IndexOf("ERROR", StringComparison.Ordinal) >= 0) errors++;
+            }
+            Log("掉线窗口（近 10 分钟）适配器共记录 " + errors + " 条合成失败；" +
+                "服务恢复后适配器会原地重试，卡住的句子将从断点继续播放");
+        }
+        catch { }
+    }
+
     static void KillTree(int pid)
     {
         try
@@ -590,6 +633,52 @@ public class Furina
 
             ticks++;
             elapsed++;
+
+            // 语音服务快速通道：每 5 秒探活，连续 2 次"拒绝连接"立即重拉（掉线判定 ≤10 秒）；
+            // 探活"超时"视为正在合成（忙），不计失败——杜绝误杀正在工作的服务
+            if (ticks % 5 == 0)
+            {
+                // 只有"组件曾就绪过"或"加载宽限已过"才累计失败次数
+                bool graceOver = (DateTime.Now - ttsLastStart).TotalSeconds > cfg.TtsWarmupGraceSec;
+                ProbeResult rs = ProbeDetailed(cfg.SoVitsProbe);
+                ProbeResult ra = ProbeDetailed(cfg.AdapterProbe);
+
+                if (rs == ProbeResult.Alive)
+                {
+                    if (!sovitsEverReady)
+                    {
+                        sovitsEverReady = true;
+                        SetPriorityByPort(9880, ProcessPriorityClass.Normal);
+                        Log("语音服务首次就绪，进程优先级恢复 Normal");
+                    }
+                    sovitsFails = 0;
+                }
+                else if (rs == ProbeResult.Refused && (sovitsEverReady || graceOver)) sovitsFails++;
+                else if (rs == ProbeResult.Timeout) LogBusyOnce("语音服务");
+
+                if (ra == ProbeResult.Alive)
+                {
+                    if (!adapterEverReady)
+                    {
+                        adapterEverReady = true;
+                        SetPriorityByPort(9881, ProcessPriorityClass.Normal);
+                    }
+                    adapterFails = 0;
+                }
+                else if (ra == ProbeResult.Refused && (adapterEverReady || graceOver)) adapterFails++;
+                else if (ra == ProbeResult.Timeout) LogBusyOnce("语音适配器");
+
+                if (sovitsFails >= 2 || adapterFails >= 2)
+                {
+                    Log("语音服务掉线（主服务连续拒绝 #" + sovitsFails + " / 适配器 #" + adapterFails + "），立即重拉");
+                    sovitsFails = 0;
+                    adapterFails = 0;
+                    ReportOutageWindow();
+                    StartTts();
+                }
+            }
+
+            // NewAPI 慢速通道：保持原节奏
             if (ticks >= cfg.ProbeIntervalSec)
             {
                 ticks = 0;
@@ -611,40 +700,6 @@ public class Furina
                             StartNewApi();
                         }
                     }
-                }
-
-                // 探活始终进行；但只有"组件曾就绪过"或"加载宽限已过"才累计失败次数——
-                // 杜绝"加载期被误重拉"与"运行期掉线被宽限掩盖"两类问题
-                bool graceOver = (DateTime.Now - ttsLastStart).TotalSeconds > cfg.TtsWarmupGraceSec;
-                bool s = Probe(cfg.SoVitsProbe);
-                bool a = Probe(cfg.AdapterProbe);
-                if (s)
-                {
-                    if (!sovitsEverReady)
-                    {
-                        sovitsEverReady = true;
-                        SetPriorityByPort(9880, ProcessPriorityClass.Normal);
-                        Log("语音服务首次就绪，进程优先级恢复 Normal");
-                    }
-                    sovitsFails = 0;
-                }
-                else if (sovitsEverReady || graceOver) sovitsFails++;
-                if (a)
-                {
-                    if (!adapterEverReady)
-                    {
-                        adapterEverReady = true;
-                        SetPriorityByPort(9881, ProcessPriorityClass.Normal);
-                    }
-                    adapterFails = 0;
-                }
-                else if (adapterEverReady || graceOver) adapterFails++;
-                if (sovitsFails >= cfg.FailRestartThreshold || adapterFails >= cfg.FailRestartThreshold)
-                {
-                    Log("语音服务连续探活失败（主服务 #" + sovitsFails + " / 适配器 #" + adapterFails + "），重新拉起");
-                    sovitsFails = 0;
-                    adapterFails = 0;
-                    StartTts();
                 }
             }
             Thread.Sleep(1000);
