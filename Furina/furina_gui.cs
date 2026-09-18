@@ -576,10 +576,12 @@ class MainForm : Form
         grp.Text = "运行";
         grp.AutoSize = true;
         grp.Dock = DockStyle.Top;
-        FlowLayoutPanel flow = new FlowLayoutPanel();
-        flow.Dock = DockStyle.Top;
-        flow.AutoSize = true;
-        flow.WrapContents = false;
+
+        // 第一行：操作按钮
+        FlowLayoutPanel btnFlow = new FlowLayoutPanel();
+        btnFlow.Dock = DockStyle.Top;
+        btnFlow.AutoSize = true;
+        btnFlow.WrapContents = false;
 
         Button btnSave = FlatButton("保存配置", Color.FromArgb(235, 240, 248));
         btnSave.Click += delegate { FieldsToCfg(); Furina.SaveIni(); Furina.Log("配置已保存到 furina.ini"); };
@@ -591,16 +593,25 @@ class MainForm : Form
         Button btnTutorial = FlatButton("? 教程", Color.FromArgb(255, 235, 180));
         btnTutorial.Click += delegate { new TutorialForm().Show(this); };
 
-        flow.Controls.Add(btnSave);
-        flow.Controls.Add(btnStart);
-        flow.Controls.Add(btnStop);
-        flow.Controls.Add(btnTutorial);
-        flow.Controls.Add(MakeStatusLabel("NewAPI", out lblStNewApi));
-        flow.Controls.Add(MakeStatusLabel("LLM守卫", out lblStGuard));
-        flow.Controls.Add(MakeStatusLabel("语音服务", out lblStSoVits));
-        flow.Controls.Add(MakeStatusLabel("语音适配器", out lblStAdapter));
-        flow.Controls.Add(MakeStatusLabel("AIRI", out lblStAiri));
-        grp.Controls.Add(flow);
+        btnFlow.Controls.Add(btnSave);
+        btnFlow.Controls.Add(btnStart);
+        btnFlow.Controls.Add(btnStop);
+        btnFlow.Controls.Add(btnTutorial);
+
+        // 第二行：五组件状态灯（默认窗口宽度下也能完整显示）
+        FlowLayoutPanel pillFlow = new FlowLayoutPanel();
+        pillFlow.Dock = DockStyle.Top;
+        pillFlow.AutoSize = true;
+        pillFlow.WrapContents = false;
+        pillFlow.Controls.Add(MakeStatusLabel("NewAPI", out lblStNewApi));
+        pillFlow.Controls.Add(MakeStatusLabel("LLM守卫", out lblStGuard));
+        pillFlow.Controls.Add(MakeStatusLabel("语音服务", out lblStSoVits));
+        pillFlow.Controls.Add(MakeStatusLabel("语音适配器", out lblStAdapter));
+        pillFlow.Controls.Add(MakeStatusLabel("AIRI", out lblStAiri));
+
+        // 后添加的先停靠：按钮行在上，状态灯行在下
+        grp.Controls.Add(pillFlow);
+        grp.Controls.Add(btnFlow);
         return grp;
     }
 
