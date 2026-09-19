@@ -2,6 +2,12 @@
 """OpenAI 兼容 TTS 适配器：把 AIRI 的 /v1/audio/speech 请求翻译成 GPT-SoVITS api_v2 的 /tts。
 仅监听 127.0.0.1:9881，仅依赖标准库。
 
+v4（范式重整：守卫预合成 + 逐句缓存命中）：
+- /warm 预合成端点：守卫（llm_guard.py）拿到完整回复后按句预合成入缓存（去标点键，
+  上限 64 条），AIRI 的逐句 /audio/speech 请求命中即秒回，语音时延藏进 LLM 响应间隙；
+- 情绪路由：守卫解析的 ACT 情绪分段优先，信号词+粘性退化为无守卫时的兜底；
+- 合成串行锁保留为廉价保险（新范式下竞争极少）。
+
 v3：
 - 启动校验参考音时长（SoVITS 要求 3~10 秒），越界直接移出轮换池；
 - 上游合成失败（如 400）时把该参考音拉入进程级黑名单，并用已知可用的兜底参考音重试一次，
@@ -133,6 +139,23 @@ _BAD_REFS = set()
 # （GPU 本来就是单流），又能保证"先请求的句子先返回"，播放顺序与请求顺序一致。
 # 排队中的请求在语音服务掉线恢复后按序继续（配合 _synthesize_resilient 的等待重试）。
 _SYNTH_LOCK = threading.Lock()
+
+# 预合成缓存：守卫（llm_guard.py）拿到完整回复后按句 /warm 预合成入缓存，
+# AIRI 的逐句 /audio/speech 请求命中即秒回。key = 去标点空白后的句子文本。
+_AUDIO_CACHE = {}
+_CACHE_ORDER = []
+_CACHE_CAP = 64
+
+
+def _cache_key(text):
+    return _strip_for_match(text)
+
+
+def _cache_put(key, wav):
+    _AUDIO_CACHE[key] = wav
+    _CACHE_ORDER.append(key)
+    while len(_CACHE_ORDER) > _CACHE_CAP:
+        _AUDIO_CACHE.pop(_CACHE_ORDER.pop(0), None)
 
 # 粘性状态
 _last_ref = None
@@ -439,6 +462,35 @@ def _synthesize_resilient(text, ref):
             time.sleep(UPSTREAM_RETRY_EVERY)
 
 
+def _produce(text):
+    """合成一句（已清洗+归一化的文本）：选音 → 弹性合成 → 时长检查 → 补静默。
+    返回 wav 字节，失败抛异常。"""
+    ref, mood, sticky = _pick_ref(text)
+    t0 = time.time()
+    with _SYNTH_LOCK:
+        wav, dur = _synthesize_resilient(text, ref)
+        # 时长合理性检查：合成结果相对字数明显偏短，多半是塌成了气声/吞字，
+        # 换兜底参考音重试一次。留 0.08s 余量，避免边界值（如 2.0s<2.0s）误触发。
+        min_dur = max(0.6, 0.20 * _hanzi_count(text))
+        if dur < min_dur - 0.08:
+            fallback = next(
+                (r for r in _GROUP_REFS['calm']
+                 if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
+                None)
+            if fallback is not None:
+                _log('audio too short (%.1fs < %.1fs) ref=%s -> retry with %s' % (
+                    dur, min_dur, os.path.basename(ref['path']),
+                    os.path.basename(fallback['path'])))
+                ref, sticky = fallback, False
+                wav, dur = _synthesize(text, ref)
+        wav = _pad_wav(wav)
+    _log('tts %d chars mood=%s%s ref=%s -> %.1fs audio, %.1fs gen | %s' % (
+        len(text), mood, '(sticky)' if sticky else '',
+        os.path.basename(ref['path']), dur, time.time() - t0,
+        text[:40].replace('\n', ' ')))
+    return wav
+
+
 class H(BaseHTTPRequestHandler):
     def end_headers(self):
         # AIRI 渲染进程（file:// 来源）fetch 本会触发 CORS 预检，必须放行
@@ -479,6 +531,9 @@ class H(BaseHTTPRequestHandler):
             self._send_json(404, {'error': 'not found'})
 
     def do_POST(self):
+        if self.path == '/warm':
+            self._handle_warm()
+            return
         if self.path != '/v1/audio/speech':
             self._send_json(404, {'error': 'not found'})
             return
@@ -506,38 +561,41 @@ class H(BaseHTTPRequestHandler):
                 _log('skip(punct-only): %r -> 0.3s silence' % text)
                 self._send_wav(_silence_wav())
                 return
-            ref, mood, sticky = _pick_ref(text)
-            t0 = time.time()
-            with _SYNTH_LOCK:
-                try:
-                    wav, dur = _synthesize_resilient(text, ref)
-                except Exception as e:
-                    _log('ERROR: %s' % e)
-                    self._send_json(502, {'error': f'upstream GPT-SoVITS failed: {e}'})
-                    return
-                # 时长合理性检查：合成结果相对字数明显偏短，多半是塌成了气声/吞字，
-                # 换兜底参考音重试一次。留 0.08s 余量，避免边界值（如 2.0s<2.0s）误触发。
-                min_dur = max(0.6, 0.20 * _hanzi_count(text))
-                if dur < min_dur - 0.08:
-                    fallback = next(
-                        (r for r in _GROUP_REFS['calm']
-                         if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
-                        None)
-                    if fallback is not None:
-                        _log('audio too short (%.1fs < %.1fs) ref=%s -> retry with %s' % (
-                            dur, min_dur, os.path.basename(ref['path']),
-                            os.path.basename(fallback['path'])))
-                        ref, sticky = fallback, False
-                        wav, dur = _synthesize(text, ref)
-                wav = _pad_wav(wav)
-            _log('tts %d chars mood=%s%s ref=%s -> %.1fs audio, %.1fs gen | %s' % (
-                len(text), mood, '(sticky)' if sticky else '',
-                os.path.basename(ref['path']), dur, time.time() - t0,
-                text[:40].replace('\n', ' ')))
+            # 预合成缓存命中即秒回（守卫已按句预合成）
+            key = _cache_key(text)
+            cached = _AUDIO_CACHE.pop(key, None)
+            if cached is not None:
+                _log('tts (cache-hit) %d chars | %s' % (
+                    len(text), text[:40].replace('\n', ' ')))
+                self._send_wav(cached)
+                return
+            wav = _produce(text)
+            _cache_put(key, wav)
             self._send_wav(wav)
         except Exception as e:
             _log('ERROR: %s' % e)
             self._send_json(502, {'error': f'upstream GPT-SoVITS failed: {e}'})
+
+    def _handle_warm(self):
+        """预合成端点：守卫按句推送，合成结果入缓存；AIRI 的正式请求命中即秒回。"""
+        try:
+            n = int(self.headers.get('Content-Length', 0))
+            req = json.loads(self.rfile.read(n).decode('utf-8'))
+            text = _normalize_text(_clean_text(req.get('input') or ''))
+            if not re.search(r'[一-鿿A-Za-z0-9]', text or ''):
+                self._send_json(200, {'ok': True, 'skipped': True})
+                return
+            key = _cache_key(text)
+            if key in _AUDIO_CACHE:
+                self._send_json(200, {'ok': True, 'cached': True})
+                return
+            t0 = time.time()
+            _cache_put(key, _produce(text))
+            _log('warm %.1fs | %s' % (time.time() - t0, text[:30]))
+            self._send_json(200, {'ok': True})
+        except Exception as e:
+            _log('warm ERROR: %s' % e)
+            self._send_json(502, {'error': '%s' % e})
 
     def log_message(self, *a):
         pass

@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -35,6 +36,8 @@ def _arg(name, default):
 PORT = int(_arg('--port', '3001'))
 UPSTREAM = _arg('--upstream', 'http://127.0.0.1:3000/v1').rstrip('/')
 MAX_CHARS = int(_arg('--max-chars', '1000'))
+# 语音适配器地址：守卫拿到完整回复后按句预合成入缓存，AIRI 的逐句请求将命中缓存
+ADAPTER = _arg('--adapter', 'http://127.0.0.1:9881').rstrip('/')
 
 CORRECTION = ('你的上一段回复超过了长度限制（%d字）。请在完全保持角色人格与语气的前提下，'
               '把同样的意思压缩到%d字以内重新输出整段回复，只输出正文，不要解释、不要分段标题。')
@@ -146,7 +149,7 @@ def _trim_to_limit(s, limit):
     return body.rstrip() + '……'
 
 
-def _upstream_chat(messages, model, temperature):
+def _upstream_chat(messages, model, temperature, auth=''):
     body = {
         'model': model,
         'messages': messages,
@@ -154,10 +157,13 @@ def _upstream_chat(messages, model, temperature):
     }
     if temperature is not None:
         body['temperature'] = temperature
+    headers = {'Content-Type': 'application/json'}
+    if auth:
+        headers['Authorization'] = auth
     req = urllib.request.Request(
         UPSTREAM + '/chat/completions',
         data=json.dumps(body).encode('utf-8'),
-        headers={'Content-Type': 'application/json'},
+        headers=headers,
         method='POST',
     )
     with urllib.request.urlopen(req, timeout=120) as resp:
@@ -166,17 +172,60 @@ def _upstream_chat(messages, model, temperature):
 
 
 def _repack_sse(content, model):
-    """把完整正文打包成 OpenAI 流式分块。"""
+    """把完整正文按句拆成多个 SSE 增量分块，恢复逐句流式节奏。
+
+    分块按句尾标点（。！？!?；;）切；ACT 指令不含此类标点，天然留在各自句块内，
+    AIRI 的动作解析不受影响。
+    """
     base = {'id': 'chatcmpl-furina-guard', 'object': 'chat.completion.chunk',
             'created': int(time.time()), 'model': model}
-    c1 = dict(base)
-    c1['choices'] = [{'index': 0, 'delta': {'role': 'assistant', 'content': content},
-                      'finish_reason': None}]
-    c2 = dict(base)
-    c2['choices'] = [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]
-    return ('data: %s\n\n' % json.dumps(c1, ensure_ascii=False)
-            + 'data: %s\n\n' % json.dumps(c2, ensure_ascii=False)
-            + 'data: [DONE]\n\n')
+    out = []
+    for i, chunk in enumerate(_split_sentences(content)):
+        c = dict(base)
+        c['choices'] = [{'index': 0, 'delta': {'role': 'assistant', 'content': chunk},
+                         'finish_reason': None}]
+        out.append('data: %s\n\n' % json.dumps(c, ensure_ascii=False))
+    c = dict(base)
+    c['choices'] = [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]
+    out.append('data: %s\n\n' % json.dumps(c, ensure_ascii=False))
+    out.append('data: [DONE]\n\n')
+    return ''.join(out)
+
+
+_SENT_SPLIT = re.compile(r'[^。！？!?；;\n]*[。！？!?；;]')
+
+
+def _split_sentences(text):
+    """按句尾标点断句（保留标点），末段无标点则作为最后一句。"""
+    parts = _SENT_SPLIT.findall(text)
+    tail = _SENT_SPLIT.sub('', text).strip()
+    if tail:
+        parts.append(tail)
+    return [p for p in parts if p.strip()]
+
+
+def _prefetch_voice(plain):
+    """把剥离 ACT 的正文按句推给适配器预合成（后台线程，不阻塞 SSE 返回）。
+
+    AIRI 随后逐句请求时，适配器直接命中缓存秒回——语音时延被藏进
+    "守卫处理 + SSE 推送"的间隙里，播放顺序由 AIRI 的请求顺序天然保证。
+    """
+    sentences = _split_sentences(plain)
+    if not sentences:
+        return
+
+    def worker():
+        for s in sentences:
+            try:
+                body = json.dumps({'input': s}).encode('utf-8')
+                req = urllib.request.Request(
+                    ADAPTER + '/warm', data=body,
+                    headers={'Content-Type': 'application/json'}, method='POST')
+                urllib.request.urlopen(req, timeout=120).read()
+            except Exception as e:
+                _log('warm failed for %r: %s' % (s[:20], e))
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 class H(BaseHTTPRequestHandler):
@@ -240,13 +289,18 @@ class H(BaseHTTPRequestHandler):
             self._passthrough(self._read_body())
             return
         try:
-            req = json.loads(self._read_body().decode('utf-8') or '{}')
+            raw = self._read_body()
+            try:
+                req = json.loads(raw.decode('utf-8'))
+            except UnicodeDecodeError:
+                req = json.loads(raw.decode('gbk', errors='replace'))
             messages = req.get('messages') or []
             model = req.get('model', '')
             want_stream = bool(req.get('stream'))
             temperature = req.get('temperature')
+            auth = self.headers.get('Authorization', '')
 
-            content = _upstream_chat(messages, model, temperature)
+            content = _upstream_chat(messages, model, temperature, auth)
             # 字数上限只算"最终显示给用户的正文"：ACT/DELAY 等舞台指令不计入
             plain, segments = _parse_act_segments(content)
             n = _char_count(plain)
@@ -259,7 +313,7 @@ class H(BaseHTTPRequestHandler):
                     {'role': 'assistant', 'content': content},
                     {'role': 'user', 'content': CORRECTION % (MAX_CHARS, MAX_CHARS)},
                 ]
-                content = _upstream_chat(fix, model, temperature)
+                content = _upstream_chat(fix, model, temperature, auth)
                 plain, segments = _parse_act_segments(content)
                 n2 = _char_count(plain)
                 _log('regenerated: %d chars' % n2)
@@ -271,6 +325,8 @@ class H(BaseHTTPRequestHandler):
 
             # 把最终版本的 ACT 情绪分段写给语音适配器（含打回重生成的版本）
             _write_mood_map(segments)
+            # 预合成：AIRI 随后逐句请求时命中缓存，语音零等待
+            _prefetch_voice(plain)
 
             if want_stream:
                 self._send(200, _repack_sse(content, model).encode('utf-8'),

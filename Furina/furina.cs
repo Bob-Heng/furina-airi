@@ -707,11 +707,14 @@ public class Furina
         {
             string py = ResolvePath(cfg.PythonExe);
             string script = Path.Combine(Path.GetDirectoryName(ResolvePath(cfg.TtsBat)), "llm_guard.py");
+            string adapterBase = cfg.AdapterProbe;
+            int acut = adapterBase.LastIndexOf("/health", StringComparison.OrdinalIgnoreCase);
+            if (acut > 0) adapterBase = adapterBase.Substring(0, acut);
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = py;
             psi.Arguments = string.Format(
-                "\"{0}\" --port {1} --upstream \"{2}\" --max-chars {3}",
-                script, cfg.LlmGuardPort, cfg.LlmGuardUpstream, cfg.LlmGuardMaxChars);
+                "\"{0}\" --port {1} --upstream \"{2}\" --max-chars {3} --adapter \"{4}\"",
+                script, cfg.LlmGuardPort, cfg.LlmGuardUpstream, cfg.LlmGuardMaxChars, adapterBase);
             psi.WorkingDirectory = Path.GetDirectoryName(script);
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
