@@ -251,9 +251,15 @@ class H(BaseHTTPRequestHandler):
         return self.rfile.read(n) if n > 0 else b''
 
     def _passthrough(self, body):
-        """非 chat/completions 请求原样转发（/models、删除会话等）。"""
+        """非 chat/completions 请求原样转发（/models、删除会话等）。
+
+        入站路径自带 /v1 前缀，而 UPSTREAM 已含 /v1——拼接前去重，否则会变成
+        /v1/v1/models（AIRI 的 listModels 验证因此 404）。"""
+        path = self.path
+        if path == '/v1' or path.startswith('/v1/'):
+            path = path[len('/v1'):] or '/'
         req = urllib.request.Request(
-            UPSTREAM + self.path,
+            UPSTREAM + path,
             data=body if body else None,
             headers={'Content-Type': self.headers.get('Content-Type', 'application/json'),
                      'Authorization': self.headers.get('Authorization', '')},
@@ -263,11 +269,13 @@ class H(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=120) as resp:
                 data = resp.read()
                 ct = resp.headers.get('Content-Type', 'application/json')
+                _log('passthrough %s %s -> %d' % (self.command, self.path, resp.status))
                 self._send(resp.status, data, ct)
         except urllib.error.HTTPError as e:
+            _log('passthrough %s %s -> HTTP %d' % (self.command, self.path, e.code))
             self._send(e.code, e.read(), 'application/json')
         except Exception as e:
-            _log('passthrough error: %s' % e)
+            _log('passthrough %s %s ERROR: %s' % (self.command, self.path, e))
             self._send_json(502, {'error': 'upstream failed: %s' % e})
 
     def do_OPTIONS(self):
