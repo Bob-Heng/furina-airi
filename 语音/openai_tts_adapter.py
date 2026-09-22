@@ -226,14 +226,6 @@ def _pick_ref(text):
     if act_mood is not None:
         mood = act_mood
 
-    # 超短句（≤5 字）：soft/bright 组的参考音多为气声、慵懒腔，短文本极易塌成
-    # 一口呼吸声。直接改用吐字最清晰的 calm 组第一条，且不扰动粘性状态。
-    if _hanzi_count(text) <= 5:
-        for r in _GROUP_REFS['calm']:
-            if r['abs_path'] not in _BAD_REFS:
-                return r, 'calm(short)', False
-        return REF_POOL[0], 'calm(short)', False
-
     # 粘性：对话窗口内、情绪未明确改变（calm 是中性，不强制切换），且上一条参考音未被拉黑
     if (_last_ref is not None
             and _last_ref['abs_path'] not in _BAD_REFS
@@ -462,27 +454,85 @@ def _synthesize_resilient(text, ref):
             time.sleep(UPSTREAM_RETRY_EVERY)
 
 
+# 二次拆分标记：分号/省略号/破折号（AIRI 断句表不含它们，适配器内部补拆）
+_SPLIT_MARKS = re.compile(r'[；;]|——|—|……|…')
+
+
+def _needs_split(text):
+    # >12 字且含分号/省略号/破折号时内部二次拆分（标点保留在片段尾部，语气不丢）
+    return _hanzi_count(text) > 12 and bool(_SPLIT_MARKS.search(text))
+
+
+def _split_long(text):
+    """在分号/省略号/破折号处断成片段（标点留在片段尾部，保留语气）。"""
+    out, cur = [], ''
+    for m in re.finditer(r'[^；;…—]+|[；;]|——|—|……|…', text):
+        cur += m.group(0)
+        if _SPLIT_MARKS.fullmatch(m.group(0)):
+            if cur.strip():
+                out.append(cur.strip())
+            cur = ''
+    if cur.strip():
+        out.append(cur.strip())
+    return [p for p in out if re.search(r'[一-鿿A-Za-z0-9]', p)]
+
+
+def _concat_wavs(wavs):
+    """拼接多段 wav（同一合成管线产出，格式一致）。"""
+    import io
+    frames_all = b''
+    params = None
+    for wv in wavs:
+        with wave.open(io.BytesIO(wv)) as w:
+            if params is None:
+                params = (w.getnchannels(), w.getsampwidth(), w.getframerate())
+            frames_all += w.readframes(w.getnframes())
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as w:
+        w.setnchannels(params[0])
+        w.setsampwidth(params[1])
+        w.setframerate(params[2])
+        w.writeframes(frames_all)
+    return buf.getvalue()
+
+
 def _produce(text):
-    """合成一句（已清洗+归一化的文本）：选音 → 弹性合成 → 时长检查 → 补静默。
-    返回 wav 字节，失败抛异常。"""
+    """合成一句（已清洗+归一化的文本）。含分号/省略号/破折号的长句先拆片段
+    逐段合成再拼接（缓存键仍是整句，与 AIRI 的请求粒度对齐）。"""
+    if _needs_split(text):
+        pieces = _split_long(text)
+        _log('split into %d pieces (；……——) | %s' % (len(pieces), text[:30]))
+        return _concat_wavs([_produce_single(p) for p in pieces])
+    return _produce_single(text)
+
+
+def _produce_single(text):
+    """单片段合成：选音 → 弹性合成 → 时长检查 → 补静默。返回 wav，失败抛异常。"""
     ref, mood, sticky = _pick_ref(text)
     t0 = time.time()
     with _SYNTH_LOCK:
         wav, dur = _synthesize_resilient(text, ref)
-        # 时长合理性检查：合成结果相对字数明显偏短，多半是塌成了气声/吞字，
-        # 换兜底参考音重试一次。留 0.08s 余量，避免边界值（如 2.0s<2.0s）误触发。
-        min_dur = max(0.6, 0.20 * _hanzi_count(text))
-        if dur < min_dur - 0.08:
-            fallback = next(
-                (r for r in _GROUP_REFS['calm']
-                 if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
-                None)
-            if fallback is not None:
-                _log('audio too short (%.1fs < %.1fs) ref=%s -> retry with %s' % (
-                    dur, min_dur, os.path.basename(ref['path']),
-                    os.path.basename(fallback['path'])))
-                ref, sticky = fallback, False
-                wav, dur = _synthesize(text, ref)
+        # 时长合理性检查（重校准版）：基准按自然语速 0.12s/字（原 0.20 高于自然
+        # 语速，把正常音频误判成气声）；≤5 字短句免检（本就短）；重试用同情绪组，
+        # 保住 ACT 标注的语气。
+        n = _hanzi_count(text)
+        if n > 5:
+            min_dur = max(0.6, 0.12 * n)
+            if dur < min_dur - 0.08:
+                grp = _GROUP_REFS.get(mood) or _GROUP_REFS['calm']
+                fallback = next(
+                    (r for r in grp
+                     if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
+                    None) or next(
+                    (r for r in _GROUP_REFS['calm']
+                     if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
+                    None)
+                if fallback is not None:
+                    _log('audio too short (%.1fs < %.1fs) ref=%s -> retry with %s' % (
+                        dur, min_dur, os.path.basename(ref['path']),
+                        os.path.basename(fallback['path'])))
+                    ref, sticky = fallback, False
+                    wav, dur = _synthesize(text, ref)
         wav = _pad_wav(wav)
     _log('tts %d chars mood=%s%s ref=%s -> %.1fs audio, %.1fs gen | %s' % (
         len(text), mood, '(sticky)' if sticky else '',

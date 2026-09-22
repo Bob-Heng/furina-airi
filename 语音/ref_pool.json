@@ -2,42 +2,42 @@
   "_comment": "芙宁娜参考音轮换池。path 相对本文件所在目录；text 为该音频的准确台词（影响合成质量，勿随意改动）；mood 仅作标注。适配器按顺序轮换使用。",
   "refs": [
     {
-      "path": "slice_in/vo_friendship_vo_furina_vo_furina_dialog_greetingmorning.wav",
+      "path": "refs/vo_friendship_vo_furina_vo_furina_dialog_greetingmorning_trim.wav",
       "text": "早安…需要起这么早吗？再多睡一会儿也没关系吧…",
       "mood": "soft"
     },
     {
-      "path": "slice_in/vo_friendship_vo_furina_vo_furina_dialog_greetingnight2.wav",
+      "path": "refs/vo_friendship_vo_furina_vo_furina_dialog_greetingnight2_trim.wav",
       "text": "呼…正好我也困了。明天见，记得准时叫我起来…",
       "mood": "soft"
     },
     {
-      "path": "slice_in/vo_friendship_vo_furina_vo_furina_character_idle_01.wav",
+      "path": "refs/vo_friendship_vo_furina_vo_furina_character_idle_01_trim.wav",
       "text": "茶会是淑女的必修课。如果你想学习茶会礼仪的话，我可以教你喔。",
       "mood": "calm"
     },
     {
-      "path": "slice_in/vo_friendship_vo_furina_vo_furina_character_idle_03.wav",
+      "path": "refs/vo_friendship_vo_furina_vo_furina_character_idle_03_trim.wav",
       "text": "唉，人气太高也是一种苦恼，谁让我这么受欢迎呢？",
       "mood": "playful"
     },
     {
-      "path": "slice_in/vo_friendship_vo_furina_vo_furina_pref_hobby.wav",
+      "path": "refs/vo_friendship_vo_furina_vo_furina_pref_hobby_trim.wav",
       "text": "《王后的荣冠》还没有出续作吗？真遗憾，这种正义战胜邪恶的经典作品总是让人百看不厌。",
       "mood": "content"
     },
     {
-      "path": "refs/vo_friendship_pref_fooddislike_trim.wav",
+      "path": "refs/vo_friendship_pref_fooddislike_trim_trim.wav",
       "text": "简单来说，我讨厌大部分「创意菜」。",
       "mood": "serious"
     },
     {
-      "path": "slice_in/vo_friendship_vo_furina_vo_furina_weather_snowy_01.wav",
+      "path": "refs/vo_friendship_vo_furina_vo_furina_weather_snowy_01_trim.wav",
       "text": "哇哦，这地方很适合映影取景。",
       "mood": "bright"
     },
     {
-      "path": "slice_in/vo_friendship_vo_furina_vo_furina_dialog_annoyed_01.wav",
+      "path": "refs/vo_friendship_vo_furina_vo_furina_dialog_annoyed_01_trim.wav",
       "text": "今晚的通心粉选什么酱好呢…",
       "mood": "musing"
     }

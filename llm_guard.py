@@ -192,7 +192,9 @@ def _repack_sse(content, model):
     return ''.join(out)
 
 
-_SENT_SPLIT = re.compile(r'[^。！？!?；;\n]*[。！？!?；;]')
+# 断句粒度对齐 AIRI 实测的断句表（。！？!?，、），不在分号/省略号/破折号处拆：
+# 分号长句由适配器内部二次拆分合成，缓存键保持 AIRI 粒度，预合成才能命中
+_SENT_SPLIT = re.compile(r'[^。！？!?，、\n]*[。！？!?，、]')
 
 
 def _split_sentences(text):
