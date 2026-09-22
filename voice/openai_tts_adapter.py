@@ -247,8 +247,13 @@ def _pick_ref(text):
 
 
 def _clean_text(text):
-    """剥离舞台指令残留、AIRI 断句造成的边缘标点与多余空白。"""
+    """剥离舞台指令残留、AIRI 断句造成的边缘标点与多余空白。
+
+    括号舞台指示（（顿了顿，语气软下来）一类）是动作描写不是台词，整句剥除——
+    否则会被朗读成怪声/哭腔气声。"""
     text = re.sub(r'<\|.*?\|>', '', text)
+    text = re.sub(r'（[^（）]*）', '', text)
+    text = re.sub(r'\([^()]*\)', '', text)
     text = re.sub(r'[，、；：]\s*([？！])', r'\1', text)  # '，？' → '？' 一类断句残留
     text = re.sub(r'—+\s*$', '', text)  # 句尾孤悬的破折号是断句碎片，会让模型拖出气息声
     text = re.sub(r'\s+', ' ', text).strip()
@@ -469,6 +474,12 @@ def _split_long(text):
     for m in re.finditer(r'[^；;…—]+|[；;]|——|—|……|…', text):
         cur += m.group(0)
         if _SPLIT_MARKS.fullmatch(m.group(0)):
+            # 省略号/分号保留在片段尾部（拖长的语气）；破折号直接丢弃——
+            # 带破折号尾部的片段合成极易塌成一口气声（实测 0.8s 塌缩）
+            if not re.fullmatch(r'—{1,2}', m.group(0)):
+                pass  # 已并入 cur
+            else:
+                cur = cur[:-len(m.group(0))]
             if cur.strip():
                 out.append(cur.strip())
             cur = ''
@@ -596,7 +607,9 @@ class H(BaseHTTPRequestHandler):
                 req = json.loads(raw.decode('gbk', errors='replace'))
             text = _clean_text(req.get('input') or '')
             if not text:
-                self._send_json(400, {'error': 'empty input'})
+                # 纯舞台指示/空文本：返回一拍静默而非报错，保持句间节奏
+                _log('skip(stage-dir/empty): %r -> 0.3s silence' % (req.get('input') or '')[:30])
+                self._send_wav(_silence_wav())
                 return
             # 长度保险丝：单句请求异常过长（正常为句片段）直接拒绝，避免拖死合成服务
             if _hanzi_count(text) > 500:
