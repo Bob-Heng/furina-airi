@@ -70,7 +70,7 @@ def _pool_of(emotion):
     return 'calm'
 
 
-MOOD_MAP_FILE = os.path.join(BASE_DIR, '语音', 'act_mood_map.json')
+MOOD_MAP_FILE = os.path.join(BASE_DIR, 'voice', 'act_mood_map.json')
 
 
 def _parse_act_segments(content):

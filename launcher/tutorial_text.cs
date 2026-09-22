@@ -59,13 +59,13 @@ TTS 选择 OpenAI 兼容：地址 http://127.0.0.1:9881/v1，模型 gpt-sovits-t
 4. 在 语音\ref_pool.json 中登记每条参考音：路径、逐字台词、情绪标签（soft/calm/bright）。台词必须逐字准确，否则明显拉低合成质量。
 
 ## 2.2 模型选取与安装
-1. 下载 GPT-SoVITS 整合包（建议 v2ProPlus），解压到项目目录下的 GPT-SoVITS-main 文件夹。
+1. 下载 GPT-SoVITS 整合包（建议 v2ProPlus），解压到项目目录下的 runtime\GPT-SoVITS-main 文件夹。
 2. 按整合包说明安装 Python 环境；依赖版本快照见 requirements-frozen.txt。
 
 ## 2.3 训练与启动
 1. 把语音切成 3~10 秒小段，放入切片目录。
 2. 打开 GPT-SoVITS 网页界面，依次训练 GPT 模型（.ckpt）与 SoVITS 模型（.pth）。
-3. 用 api_v2.py 在 127.0.0.1:9880 启动推理服务；参照仓库根目录的「启动芙宁娜语音服务.bat」。
+3. 用 api_v2.py 在 127.0.0.1:9880 启动推理服务；参照仓库根目录的「start-voice.bat」。
 4. 语气优化：训练时提高角色日常对话语料的权重，压低演讲/念白类语料的权重。
 
 # 第三章 · 语音适配器配置

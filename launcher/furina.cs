@@ -45,7 +45,7 @@ public class Furina
         public string NewApiProbe = "http://127.0.0.1:3000/api/status";
         public string SessionSecret = "";
         public string AiriExe = "";
-        public string TtsBat = @"..\启动芙宁娜语音服务.bat";
+        public string TtsBat = @"..\start-voice.bat";
         public string SoVitsProbe = "http://127.0.0.1:9880/";
         public string AdapterProbe = "http://127.0.0.1:9881/health";
         public string OneApiDb = "";
@@ -61,7 +61,7 @@ public class Furina
         public int LlmGuardPort = 3001;
         public int LlmGuardMaxChars = 1000;
         public string LlmGuardUpstream = "";
-        public string PythonExe = @"..\sovits-venv\Scripts\python.exe";
+        public string PythonExe = @"..\runtime\sovits-venv\Scripts\python.exe";
     }
 
     public static Cfg cfg = new Cfg();
@@ -520,7 +520,7 @@ public class Furina
         try
         {
             string logPath = Path.Combine(
-                Path.GetDirectoryName(ResolvePath(cfg.TtsBat)), @"语音\adapter.log");
+                Path.GetDirectoryName(ResolvePath(cfg.TtsBat)), @"voice\adapter.log");
             if (!File.Exists(logPath)) return;
             string[] lines = File.ReadAllLines(logPath, Encoding.UTF8);
             DateTime cutoff = DateTime.Now.AddMinutes(-10);
@@ -545,7 +545,7 @@ public class Furina
         try
         {
             string rootDir = Path.GetDirectoryName(ResolvePath(cfg.TtsBat));
-            string voiceDir = Path.Combine(rootDir, "语音");
+            string voiceDir = Path.Combine(rootDir, "voice");
             foreach (string name in new string[] { "adapter.log", "tts_api.log" })
             {
                 try
