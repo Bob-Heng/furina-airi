@@ -507,49 +507,68 @@ def _concat_wavs(wavs):
     return buf.getvalue()
 
 
-def _produce(text):
-    """合成一句（已清洗+归一化的文本）。含分号/省略号/破折号的长句先拆片段
-    逐段合成再拼接（缓存键仍是整句，与 AIRI 的请求粒度对齐）。"""
-    if _needs_split(text):
-        pieces = _split_long(text)
-        _log('split into %d pieces (；……——) | %s' % (len(pieces), text[:30]))
-        return _concat_wavs([_produce_single(p) for p in pieces])
-    return _produce_single(text)
-
-
-def _produce_single(text):
-    """单片段合成：选音 → 弹性合成 → 时长检查 → 补静默。返回 wav，失败抛异常。"""
+def _produce_single_locked(text):
+    """单片段合成（锁已由 _produce 持有）：选音 → 弹性合成 → 时长检查 → 补静默。"""
     ref, mood, sticky = _pick_ref(text)
     t0 = time.time()
-    with _SYNTH_LOCK:
-        wav, dur = _synthesize_resilient(text, ref)
-        # 时长合理性检查（重校准版）：基准按自然语速 0.12s/字（原 0.20 高于自然
-        # 语速，把正常音频误判成气声）；≤5 字短句免检（本就短）；重试用同情绪组，
-        # 保住 ACT 标注的语气。
-        n = _hanzi_count(text)
-        if n > 5:
-            min_dur = max(0.6, 0.12 * n)
-            if dur < min_dur - 0.08:
-                grp = _GROUP_REFS.get(mood) or _GROUP_REFS['calm']
-                fallback = next(
-                    (r for r in grp
-                     if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
-                    None) or next(
-                    (r for r in _GROUP_REFS['calm']
-                     if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
-                    None)
-                if fallback is not None:
-                    _log('audio too short (%.1fs < %.1fs) ref=%s -> retry with %s' % (
-                        dur, min_dur, os.path.basename(ref['path']),
-                        os.path.basename(fallback['path'])))
-                    ref, sticky = fallback, False
-                    wav, dur = _synthesize(text, ref)
-        wav = _pad_wav(wav)
+    wav, dur = _synthesize_resilient(text, ref)
+    # 时长合理性检查（重校准版）：基准按自然语速 0.12s/字（原 0.20 高于自然
+    # 语速，把正常音频误判成气声）；≤5 字短句免检（本就短）；重试用同情绪组，
+    # 保住 ACT 标注的语气。
+    n = _hanzi_count(text)
+    if n > 5:
+        min_dur = max(0.6, 0.12 * n)
+        if dur < min_dur - 0.08:
+            grp = _GROUP_REFS.get(mood) or _GROUP_REFS['calm']
+            fallback = next(
+                (r for r in grp
+                 if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
+                None) or next(
+                (r for r in _GROUP_REFS['calm']
+                 if r['abs_path'] not in _BAD_REFS and r['abs_path'] != ref['abs_path']),
+                None)
+            if fallback is not None:
+                _log('audio too short (%.1fs < %.1fs) ref=%s -> retry with %s' % (
+                    dur, min_dur, os.path.basename(ref['path']),
+                    os.path.basename(fallback['path'])))
+                ref, sticky = fallback, False
+                wav, dur = _synthesize(text, ref)
+    wav = _pad_wav(wav)
     _log('tts %d chars mood=%s%s ref=%s -> %.1fs audio, %.1fs gen | %s' % (
         len(text), mood, '(sticky)' if sticky else '',
         os.path.basename(ref['path']), dur, time.time() - t0,
         text[:40].replace('\n', ' ')))
     return wav
+
+
+# 正式请求优先：有 AIRI 的实时请求在等待时，守卫的预热 job 不抢合成锁
+_pending_real = 0
+_real_cond = threading.Condition()
+
+
+def _produce(text, real=True):
+    """合成一句（已清洗+归一化的文本），整句持锁原子完成（拆分片段不与其他
+    请求交错——否则片段间会被别的句子插队，响应被拉长数秒）。"""
+    global _pending_real
+    if real:
+        with _real_cond:
+            _pending_real += 1
+    try:
+        if not real:
+            with _real_cond:
+                while _pending_real > 0:
+                    _real_cond.wait()
+        with _SYNTH_LOCK:
+            if _needs_split(text):
+                pieces = _split_long(text)
+                _log('split into %d pieces (；……——) | %s' % (len(pieces), text[:30]))
+                return _concat_wavs([_produce_single_locked(p) for p in pieces])
+            return _produce_single_locked(text)
+    finally:
+        if real:
+            with _real_cond:
+                _pending_real -= 1
+                _real_cond.notify_all()
 
 
 class H(BaseHTTPRequestHandler):
@@ -632,7 +651,7 @@ class H(BaseHTTPRequestHandler):
                     len(text), text[:40].replace('\n', ' ')))
                 self._send_wav(cached)
                 return
-            wav = _produce(text)
+            wav = _produce(text, real=True)
             _cache_put(key, wav)
             self._send_wav(wav)
         except Exception as e:
@@ -653,7 +672,7 @@ class H(BaseHTTPRequestHandler):
                 self._send_json(200, {'ok': True, 'cached': True})
                 return
             t0 = time.time()
-            _cache_put(key, _produce(text))
+            _cache_put(key, _produce(text, real=False))
             _log('warm %.1fs | %s' % (time.time() - t0, text[:30]))
             self._send_json(200, {'ok': True})
         except Exception as e:
