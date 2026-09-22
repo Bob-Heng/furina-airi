@@ -38,6 +38,10 @@ UPSTREAM = _arg('--upstream', 'http://127.0.0.1:3000/v1').rstrip('/')
 MAX_CHARS = int(_arg('--max-chars', '1000'))
 # 语音适配器地址：守卫拿到完整回复后按句预合成入缓存，AIRI 的逐句请求将命中缓存
 ADAPTER = _arg('--adapter', 'http://127.0.0.1:9881').rstrip('/')
+# 视觉路由：含图片的请求改走视觉模型（在 NewAPI 里另建视觉渠道），纯文本仍走原模型。
+# 留空 = 未配置视觉模型：守卫剥除图片后按纯文本继续（ she 看不到图但至少会回复）。
+VISION_MODEL = _arg('--vision-model', '')
+VISION_UPSTREAM = _arg('--vision-upstream', UPSTREAM).rstrip('/')
 
 CORRECTION = ('你的上一段回复超过了长度限制（%d字）。请在完全保持角色人格与语气的前提下，'
               '把同样的意思压缩到%d字以内重新输出整段回复，只输出正文，不要解释、不要分段标题。')
@@ -126,6 +130,56 @@ def _log(msg):
         pass
 
 
+def _has_image(messages):
+    """消息里是否含图片（OpenAI 多模态 content 数组）。"""
+    for m in messages or []:
+        c = m.get('content')
+        if isinstance(c, list):
+            for part in c:
+                if isinstance(part, dict) and part.get('type') == 'image_url':
+                    return True
+    return False
+
+
+def _downscale_images(messages, max_px=1024, quality=80):
+    """压缩内嵌 base64 图片（防 413、省 token）。PIL 不可用时原样返回。
+
+    http(s) 外链图片不处理。非图片内容与纯文本消息原样保留。
+    """
+    try:
+        import base64
+        import io
+        from PIL import Image
+    except Exception:
+        return messages
+
+    def shrink(url):
+        try:
+            head, _, b64 = url.partition(',')
+            if 'base64' not in head:
+                return url
+            img = Image.open(io.BytesIO(base64.b64decode(b64)))
+            img.thumbnail((max_px, max_px))
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, 'JPEG', quality=quality)
+            return 'data:image/jpeg;base64,%s' % base64.b64encode(buf.getvalue()).decode()
+        except Exception:
+            return url
+
+    out = []
+    for m in messages or []:
+        c = m.get('content')
+        if isinstance(c, list):
+            c = [dict(p, image_url={'url': shrink(p['image_url']['url'])})
+                 if isinstance(p, dict) and p.get('type') == 'image_url'
+                 and isinstance(p.get('image_url'), dict) else p for p in c]
+            m = dict(m, content=c)
+        out.append(m)
+    return out
+
+
 def _char_count(s):
     # 按"字"计数：忽略所有空白字符
     return len(''.join((s or '').split()))
@@ -149,7 +203,7 @@ def _trim_to_limit(s, limit):
     return body.rstrip() + '……'
 
 
-def _upstream_chat(messages, model, temperature, auth=''):
+def _upstream_chat(messages, model, temperature, auth='', upstream=None):
     body = {
         'model': model,
         'messages': messages,
@@ -161,8 +215,10 @@ def _upstream_chat(messages, model, temperature, auth=''):
     if auth:
         headers['Authorization'] = auth
     req = urllib.request.Request(
-        UPSTREAM + '/chat/completions',
-        data=json.dumps(body).encode('utf-8'),
+        (upstream or UPSTREAM) + '/chat/completions',
+        # 必须 ensure_ascii=False：中文转义会让体积膨胀约 2 倍，
+        # 带 base64 图片的请求会被上游 413 拒绝
+        data=json.dumps(body, ensure_ascii=False).encode('utf-8'),
         headers=headers,
         method='POST',
     )
@@ -310,7 +366,18 @@ class H(BaseHTTPRequestHandler):
             temperature = req.get('temperature')
             auth = self.headers.get('Authorization', '')
 
-            content = _upstream_chat(messages, model, temperature, auth)
+            # 图片请求：默认原样走原上游（该上游支持视觉）；配置了视觉模型时
+            # 改走视觉渠道并压缩内嵌图片。绝不剥除图片——剥除等于替她拒绝看图。
+            target_upstream = UPSTREAM
+            if _has_image(messages):
+                if VISION_MODEL:
+                    target_upstream = VISION_UPSTREAM
+                    model = VISION_MODEL
+                    _log('vision route: -> %s' % VISION_MODEL)
+                messages = _downscale_images(messages)
+
+            content = _upstream_chat(messages, model, temperature, auth,
+                                     upstream=target_upstream)
             # 字数上限只算"最终显示给用户的正文"：ACT/DELAY 等舞台指令不计入
             plain, segments = _parse_act_segments(content)
             n = _char_count(plain)
@@ -323,7 +390,8 @@ class H(BaseHTTPRequestHandler):
                     {'role': 'assistant', 'content': content},
                     {'role': 'user', 'content': CORRECTION % (MAX_CHARS, MAX_CHARS)},
                 ]
-                content = _upstream_chat(fix, model, temperature, auth)
+                content = _upstream_chat(fix, model, temperature, auth,
+                                         upstream=target_upstream)
                 plain, segments = _parse_act_segments(content)
                 n2 = _char_count(plain)
                 _log('regenerated: %d chars' % n2)
