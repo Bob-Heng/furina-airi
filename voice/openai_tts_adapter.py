@@ -546,6 +546,40 @@ _pending_real = 0
 _real_cond = threading.Condition()
 
 
+# 同一文本的并发合成只执行一次：守卫预热与 AIRI 请求同时到达时，
+# 后到者等待先到的结果，避免同一句被合成两遍（GPU 负载翻倍的根源）
+_INFLIGHT = {}
+_inflight_lock = threading.Lock()
+
+
+def _synthesize_once(key, text, real):
+    """key 已有在途合成时等待其结果；否则执行合成、入缓存、广播完成。"""
+    with _inflight_lock:
+        evt = _INFLIGHT.get(key)
+        if evt is None:
+            evt = threading.Event()
+            _INFLIGHT[key] = evt
+            owner = True
+        else:
+            owner = False
+    if not owner:
+        _log('coalesced (waiting in-flight) | %s' % text[:24])
+        if not evt.wait(150):
+            raise RuntimeError('in-flight synthesis timed out')
+        cached = _AUDIO_CACHE.pop(key, None)
+        if cached is None:
+            raise RuntimeError('in-flight synthesis produced nothing')
+        return cached
+    try:
+        wav = _produce(text, real=real)
+        _cache_put(key, wav)
+        return wav
+    finally:
+        with _inflight_lock:
+            _INFLIGHT.pop(key, None)
+            evt.set()
+
+
 def _produce(text, real=True):
     """合成一句（已清洗+归一化的文本），整句持锁原子完成（拆分片段不与其他
     请求交错——否则片段间会被别的句子插队，响应被拉长数秒）。"""
@@ -651,8 +685,7 @@ class H(BaseHTTPRequestHandler):
                     len(text), text[:40].replace('\n', ' ')))
                 self._send_wav(cached)
                 return
-            wav = _produce(text, real=True)
-            _cache_put(key, wav)
+            wav = _synthesize_once(key, text, real=True)
             self._send_wav(wav)
         except Exception as e:
             _log('ERROR: %s' % e)
@@ -672,7 +705,7 @@ class H(BaseHTTPRequestHandler):
                 self._send_json(200, {'ok': True, 'cached': True})
                 return
             t0 = time.time()
-            _cache_put(key, _produce(text, real=False))
+            _synthesize_once(key, text, real=False)
             _log('warm %.1fs | %s' % (time.time() - t0, text[:30]))
             self._send_json(200, {'ok': True})
         except Exception as e:
