@@ -23,6 +23,8 @@ assets/motions/
 # 构建产物与卡包
 launcher/furina.exe
 assets/character-card/*.zip
+# 汉仪商业字体（从本机原神目录读取，绝不入库；得意黑为 OFL 可入库）
+launcher/fonts/SDK_SC_Web.ttf
 
 # 私密与待处理（用户手动处置）
 待处理/
@@ -43,3 +45,6 @@ launcher/selfshot_debug.txt
 
 # 设计参考图（版权素材，不入库）
 参考图*.jpg
+
+# 版权 CG 素材（本机参考，不入库）
+*.jpg

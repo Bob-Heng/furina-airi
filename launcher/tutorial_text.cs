@@ -111,7 +111,7 @@ static class MiniMd
     {
         StringBuilder sb = new StringBuilder();
         sb.Append("{\\rtf1\\ansi\\deff0");
-        sb.Append("{\\fonttbl{\\f0\\fnil\\fcharset134 Microsoft YaHei UI;}}");
+        sb.Append("{\\fonttbl{\\f0\\fnil\\fcharset134 " + Theme.UiFontName + ";}}");
         sb.Append("{\\colortbl ;\\red25\\green90\\blue205;\\red40\\green60\\blue90;\\red30\\green30\\blue30;}");
         sb.Append("\\viewkind4\\uc1\\pard\\f0\\fs21 ");
         foreach (string raw in md.Replace("\r\n", "\n").Split('\n'))

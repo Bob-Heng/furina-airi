@@ -42,9 +42,10 @@ class Program
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += delegate (object s, ThreadExceptionEventArgs e)
         {
-            MessageBox.Show(e.Exception.ToString(), "furina 未处理异常");
+            Furina.Log("UI 异常（已拦截，不中断运行）: " + e.Exception);
         };
         Furina.InitPaths();
 
@@ -94,9 +95,9 @@ class Program
 
     static void RunSelfShot(MainForm f)
     {
-        // 逐页截图：home -> components -> settings -> guide -> logs
-        // 两拍制：本拍截图、下一拍切页（滑动动画在计时器间隔内完成，不阻塞 UI 线程）
-        string[] order = { "home", "components", "settings", "guide", "logs" };
+        // 逐页截图：home -> components -> 组件二级配置 -> guide -> logs
+        // 两拍制：本拍截图、下一拍切页（不阻塞 UI 线程）
+        string[] order = { "home", "components", "compdetail", "guide", "logs" };
         int idx = 0;
         bool captured = false;
         System.Windows.Forms.Timer t = new System.Windows.Forms.Timer();
@@ -124,7 +125,12 @@ class Program
                 return;
             }
             idx++;
-            if (idx < order.Length) { f.NavigateInstant(order[idx]); captured = false; }
+            if (idx < order.Length)
+            {
+                if (order[idx] == "compdetail") f.OpenComponentDetailForShot(0);
+                else f.NavigateInstant(order[idx]);
+                captured = false;
+            }
         };
         t.Start();
     }
@@ -177,15 +183,98 @@ static class Theme
     public static readonly Color SplashTop = Color.FromArgb(247, 251, 255);
     public static readonly Color SplashBottom = Color.FromArgb(219, 238, 250);
 
-    public static readonly Font FontBrand = new Font("幼圆", 16, FontStyle.Bold);
-    public static readonly Font FontHero = new Font("幼圆", 24, FontStyle.Bold);
-    public static readonly Font FontTitle = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold);
-    public static readonly Font FontBody = new Font("Microsoft YaHei UI", 9.5f);
-    public static readonly Font FontSmall = new Font("Microsoft YaHei UI", 8.5f);
+    public static string UiFontName = "Microsoft YaHei UI";
+    public static readonly Font FontBrand;
+    public static readonly Font FontHero;
+    public static readonly Font FontTitle;
+    public static readonly Font FontBody;
+    public static readonly Font FontSmall;
     public static readonly Font FontLog = new Font("Consolas", 9.5f);
     public const string FontIcons = "Segoe MDL2 Assets";
 
     public const int DurMicro = 120, DurShort = 220, DurLong = 420;
+
+    static Theme()
+    {
+        FontFamily fam = null;
+        string fontFile = LocateUiFont();
+        if (fontFile != null)
+        {
+            try
+            {
+                AddFontResourceEx(fontFile, FR_PRIVATE, IntPtr.Zero);
+                // 注意：PrivateFontCollection 必须常驻存活，
+                // 取出 FontFamily 后 dispose 集合会使其原生句柄失效（GetName 抛 ArgumentException）
+                fontPfc = new PrivateFontCollection();
+                fontPfc.AddFontFile(fontFile);
+                if (fontPfc.Families.Length > 0) fam = fontPfc.Families[0];
+            }
+            catch { fam = null; }
+        }
+        if (fam == null) fam = new FontFamily("Microsoft YaHei UI");
+        UiFontName = fam.Name;
+        FontBrand = new Font(fam, 17);
+        FontHero = new Font(fam, 26);
+        FontTitle = new Font(fam, 10.5f);
+        FontBody = new Font(fam, 10f);
+        FontSmall = new Font(fam, 9f);
+    }
+
+    static PrivateFontCollection fontPfc;
+
+    // 原神同款 UI 字体：本地 fonts/ → 探测原神安装目录的 SDK 字体 → 内嵌得意黑 → 雅黑
+    static string LocateUiFont()
+    {
+        string dir = null;
+        try
+        {
+            dir = Path.Combine(Furina.baseDir, "fonts");
+            Directory.CreateDirectory(dir);
+            string local = Path.Combine(dir, "SDK_SC_Web.ttf");
+            if (File.Exists(local)) return local;
+        }
+        catch { }
+        const string rel = @"YuanShen_Data\StreamingAssets\MiHoYoSDKRes\HttpServerResources\font\zh-cn.ttf";
+        try
+        {
+            foreach (DriveInfo d in DriveInfo.GetDrives())
+            {
+                if (d.DriveType != DriveType.Fixed) continue;
+                try
+                {
+                    string p = Path.Combine(d.RootDirectory.FullName, @"miHoYo Launcher\games\Genshin Impact Game", rel);
+                    if (File.Exists(p)) return p;
+                    p = Path.Combine(d.RootDirectory.FullName, @"Genshin Impact\Genshin Impact Game", rel);
+                    if (File.Exists(p)) return p;
+                }
+                catch { }
+            }
+        }
+        catch { }
+        try
+        {
+            // 内嵌的得意黑（SIL OFL 1.1，允许捆绑分发）：首次运行释放到 fonts/
+            string smiley = Path.Combine(dir, "SmileySans-Oblique.ttf");
+            if (!File.Exists(smiley))
+            {
+                Stream rs = System.Reflection.Assembly.GetExecutingAssembly()
+                    .GetManifestResourceStream("SmileySans-Oblique.ttf");
+                if (rs != null)
+                {
+                    using (rs)
+                    using (FileStream fs = File.Create(smiley))
+                        rs.CopyTo(fs);
+                }
+            }
+            if (File.Exists(smiley)) return smiley;
+        }
+        catch { }
+        return null;
+    }
+
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+    static extern int AddFontResourceEx(string lpszFilename, uint fl, IntPtr pdv);
+    const uint FR_PRIVATE = 0x10;
 
     public static float S = 1f;
     public static int Px(int v) { return (int)Math.Round(v * S); }
@@ -257,6 +346,7 @@ class CapsuleButton : Control
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        if (Width <= 0 || Height <= 0) return;
         Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
@@ -319,6 +409,7 @@ class StatusPill : Control
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        if (Width <= 0 || Height <= 0) return;
         Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Color dot = Theme.Lerp(current, target, Theme.EaseOut(blend));
@@ -354,6 +445,7 @@ class CardPanel : Panel
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        if (Width <= 0 || Height <= 0) return;
         Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
@@ -425,6 +517,7 @@ class NavItem : Control
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        if (Width <= 0 || Height <= 0) return;
         Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Color bg = Theme.Lerp(BackColor, Theme.NavHover, Math.Min(1, hoverT + selectT * 0.6));
@@ -456,20 +549,22 @@ class Page : Panel
     public Page(string key)
     {
         Key = key;
+        // 不透明 BackColor：切换滑动时不会把下层兄弟页面透出来；
+        // 渐变在 OnPaintBackground 画，子控件透明背景取到的也是同一张渐变
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
             | ControlStyles.OptimizedDoubleBuffer, true);
-        BackColor = Color.Transparent;
+        BackColor = Theme.BgBottom;
     }
 
-    protected override void OnPaint(PaintEventArgs e)
+    protected override void OnPaintBackground(PaintEventArgs e)
     {
-        Graphics g = e.Graphics;
+        // 窗口最小化等场景 ClientRectangle 为 0×0，渐变画刷会抛 ArgumentException
+        if (Width <= 0 || Height <= 0) return;
         using (LinearGradientBrush br = new LinearGradientBrush(
             ClientRectangle, Theme.BgTop, Theme.BgBottom, LinearGradientMode.Vertical))
         {
-            g.FillRectangle(br, ClientRectangle);
+            e.Graphics.FillRectangle(br, ClientRectangle);
         }
-        base.OnPaint(e);
     }
 }
 
@@ -526,7 +621,7 @@ class HomePage : Page
         BtnToSettings.Text = "组件配置";
         BtnToSettings.Size = new Size(Theme.Px(120), Theme.Px(44));
         BtnToSettings.Location = new Point(BtnToGuide.Right + Theme.Px(14), BtnMain.Top);
-        BtnToSettings.Click += delegate { owner.Navigate("settings"); };
+        BtnToSettings.Click += delegate { owner.Navigate("components"); };
         Controls.Add(BtnToSettings);
 
         Label st = new Label();
@@ -621,6 +716,7 @@ class ComponentRow : Control
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        if (Width <= 0 || Height <= 0) return;
         Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Color bg = Theme.Lerp(Theme.Panel, Theme.NavHover, hoverT);
@@ -649,8 +745,17 @@ class ComponentRow : Control
 
 class ComponentsPage : Page
 {
+    MainForm owner;
+    Panel listHost;
+    Label hint;
+    internal Page[] details = new Page[5];
+    Page activeDetail;
+    bool detailOpen;
+    System.Windows.Forms.Timer slideTimer;
+
     public ComponentsPage(MainForm owner) : base("components")
     {
+        this.owner = owner;
         int x0 = Theme.Px(32);
         Label t = new Label();
         t.Text = "组件";
@@ -660,6 +765,10 @@ class ComponentsPage : Page
         t.BackColor = Color.Transparent;
         t.Location = new Point(x0, Theme.Px(24));
         Controls.Add(t);
+
+        listHost = new Panel();
+        listHost.BackColor = Color.Transparent;
+        Controls.Add(listHost);
 
         string[][] rows = {
             new string[] { "\uECE4", "NewAPI 网关", "密钥托管与模型转发（可选）" },
@@ -674,22 +783,89 @@ class ComponentsPage : Page
             pill.Tag = i;
             owner.AllPills.Add(pill);
             ComponentRow row = new ComponentRow(rows[i][0], rows[i][1], rows[i][2], pill);
-            row.Top = t.Bottom + Theme.Px(12) + i * (Theme.Px(80));
+            row.Top = Theme.Px(12) + i * (Theme.Px(80));
             row.Left = x0;
             row.Width = owner.ContentW - x0 - Theme.Px(20);
             row.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-            Controls.Add(row);
+            row.Cursor = Cursors.Hand;
+            int idx = i;
+            row.Click += delegate { OpenDetail(idx, false); };
+            listHost.Controls.Add(row);
         }
 
-        Label hint = new Label();
-        hint.Text = "状态灯每 2 秒自动刷新；组件页仅作总览，启停与配置请分别使用主页与配置页。";
+        Control behCard = owner.BuildBehaviorCard();
+        behCard.Left = x0;
+        behCard.Top = Theme.Px(20) + 5 * Theme.Px(80);
+        behCard.Width = owner.ContentW - x0 - Theme.Px(20);
+        behCard.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        listHost.Controls.Add(behCard);
+
+        hint = new Label();
+        hint.Text = "点击组件行进入对应配置，改动自动保存；状态灯每 2 秒自动刷新。";
         hint.Font = Theme.FontSmall;
         hint.ForeColor = Theme.Dim;
         hint.AutoSize = true;
         hint.BackColor = Color.Transparent;
-        hint.Top = t.Bottom + Theme.Px(20) + 5 * Theme.Px(80);
         hint.Left = x0;
-        Controls.Add(hint);
+        listHost.Controls.Add(hint);
+
+        // 四个可配置组件的二级页立即构建（文本框须先于 HookTextChanged 存在）
+        for (int i = 0; i < 5; i++) details[i] = owner.BuildComponentDetail(i);
+
+        Layout += delegate
+        {
+            listHost.SetBounds(0, t.Bottom + Theme.Px(4),
+                ClientSize.Width, Math.Max(0, ClientSize.Height - t.Bottom - Theme.Px(4)));
+            hint.Top = behCard.Bottom + Theme.Px(10);
+            if (activeDetail != null && detailOpen)
+                activeDetail.Bounds = new Rectangle(0, 0, ClientSize.Width, ClientSize.Height);
+        };
+    }
+
+    // 二级配置页：从右侧推入覆盖列表（iOS 推入式，与 AIRI 设置同语言）
+    internal void OpenDetail(int idx, bool instant)
+    {
+        Page d = details[idx];
+        if (d == null) return;
+        if (detailOpen && activeDetail == d) return;
+        if (d.Parent == null) Controls.Add(d);
+        d.Bounds = new Rectangle(instant ? 0 : Width, 0, Width, Height);
+        d.Visible = true;
+        d.BringToFront();
+        activeDetail = d;
+        detailOpen = true;
+        if (!instant) SlideTo(d, 0, null);
+    }
+
+    internal void CloseDetail(bool instant)
+    {
+        if (!detailOpen || activeDetail == null) return;
+        Page d = activeDetail;
+        detailOpen = false;
+        activeDetail = null;
+        if (instant) { d.Visible = false; d.Left = 0; return; }
+        SlideTo(d, Width, delegate { d.Visible = false; d.Left = 0; });
+    }
+
+    void SlideTo(Page d, int toX, Action done)
+    {
+        if (slideTimer != null) slideTimer.Stop();
+        slideTimer = new System.Windows.Forms.Timer();
+        slideTimer.Interval = 16;
+        double start = Environment.TickCount / 1000.0;
+        int fromX = d.Left;
+        slideTimer.Tick += delegate
+        {
+            double p = Math.Min(1.0, (Environment.TickCount / 1000.0 - start) / 0.28);
+            double e = Theme.EaseOut(p);
+            d.Left = fromX + (int)Math.Round((toX - fromX) * e);
+            if (p >= 1)
+            {
+                slideTimer.Stop();
+                if (done != null) done();
+            }
+        };
+        slideTimer.Start();
     }
 }
 
@@ -701,6 +877,7 @@ class CharLabel : Label
 {
     protected override void OnPaint(PaintEventArgs e)
     {
+        if (Width <= 0 || Height <= 0) return;
         e.Graphics.TextRenderingHint = TextRenderingHint.AntiAlias;
         using (LinearGradientBrush br = new LinearGradientBrush(
             new Rectangle(0, 0, Width, Height),
@@ -735,6 +912,12 @@ class SplashForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         Size = new Size(Theme.Px(560), Theme.Px(240));
         DoubleBuffered = true;
+        try
+        {
+            Stream ics = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("furina.ico");
+            if (ics != null) Icon = new Icon(ics);
+        }
+        catch { }
 
         Label caption = new Label();
         caption.Text = "furina";
@@ -786,21 +969,12 @@ class SplashForm : Form
 
     static Font PickFont()
     {
-        string[] preferred = { "幼圆", "YouYuan", "Microsoft YaHei UI" };
-        InstalledFontCollection ifc = new InstalledFontCollection();
-        foreach (string name in preferred)
-        {
-            foreach (FontFamily ff in ifc.Families)
-            {
-                if (ff.Name == name)
-                    return new Font(ff, 17, FontStyle.Bold);
-            }
-        }
-        return new Font(FontFamily.GenericSansSerif, 17, FontStyle.Bold);
+        return new Font(Theme.UiFontName, 18);
     }
 
     protected override void OnPaintBackground(PaintEventArgs e)
     {
+        if (Width <= 0 || Height <= 0) return;
         using (LinearGradientBrush br = new LinearGradientBrush(
             ClientRectangle, Theme.SplashTop, Theme.SplashBottom, LinearGradientMode.Vertical))
         {
@@ -943,14 +1117,14 @@ class MainForm : Form
     TextBox txtAiri, txtTtsBat, txtNewApiExe, txtNewApiDir, txtNewApiProbe,
             txtSoVitsProbe, txtAdapterProbe, txtSession;
     Label markAiri, markTts, markNewApi, markNewApiDir, markNewApiProbe, markSoVits, markAdapter;
-    CheckBox chkAutoExit, chkKeep;
+    DarkCheckBox chkAutoExit, chkKeep;
     TextBox txtLog;
 
     // 结构
     Panel navRail, contentPanel;
     Dictionary<string, NavItem> navItems = new Dictionary<string, NavItem>();
     Dictionary<string, Page> pages = new Dictionary<string, Page>();
-    string[] navOrder = { "home", "components", "settings", "guide", "logs" };
+    string[] navOrder = { "home", "components", "guide", "logs" };
     Page currentPage;
     System.Windows.Forms.Timer slideTimer;
     int slideDir;
@@ -965,6 +1139,12 @@ class MainForm : Form
         foreach (NavItem n in navItems.Values) n.Snap();
     }
 
+    internal void OpenComponentDetailForShot(int i)
+    {
+        NavigateInstant("components");
+        ((ComponentsPage)pages["components"]).OpenDetail(i, true);
+    }
+
     Thread runThread;
     HomePage home;
     System.Windows.Forms.Timer statusTimer;
@@ -975,6 +1155,12 @@ class MainForm : Form
     public MainForm()
     {
         Text = "furina";
+        try
+        {
+            Stream ics = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("furina.ico");
+            if (ics != null) Icon = new Icon(ics);
+        }
+        catch { }
         Width = Theme.Px(1120);
         Height = Theme.Px(720);
         StartPosition = FormStartPosition.CenterScreen;
@@ -989,7 +1175,7 @@ class MainForm : Form
 
         validateTimer = new System.Windows.Forms.Timer();
         validateTimer.Interval = 400;
-        validateTimer.Tick += delegate { validateTimer.Stop(); ValidateAll(); };
+        validateTimer.Tick += delegate { validateTimer.Stop(); ValidateAll(); SaveCfg(); };
 
         statusTimer = new System.Windows.Forms.Timer();
         statusTimer.Interval = 2000;
@@ -1049,7 +1235,6 @@ class MainForm : Form
         string[][] items = {
             new string[] { "\uE80F", "主页", "home" },
             new string[] { "\uE71D", "组件", "components" },
-            new string[] { "\uE713", "配置", "settings" },
             new string[] { "\uE8A5", "教程", "guide" },
             new string[] { "\uE8BA", "日志", "logs" },
         };
@@ -1099,7 +1284,6 @@ class MainForm : Form
         home = new HomePage(this);
         pages["home"] = home;
         pages["components"] = new ComponentsPage(this);
-        pages["settings"] = BuildSettingsPage();
         pages["guide"] = BuildGuidePage();
         pages["logs"] = BuildLogsPage();
 
@@ -1112,103 +1296,165 @@ class MainForm : Form
         }
     }
 
-    Page BuildSettingsPage()
+    // ---------------------------------------------------------------
+    // 组件二级配置页（组件页点击行进入；改动自动保存）
+    // ---------------------------------------------------------------
+
+    internal Page BuildComponentDetail(int idx)
     {
-        Page page = new Page("settings");
+        string[][] meta = {
+            new string[] { "NewAPI 网关", "密钥托管与模型转发（可选）" },
+            new string[] { "LLM 守卫", "输出长度前置检查 · ACT 情绪分段" },
+            new string[] { "语音服务", "GPT-SoVITS 推理引擎" },
+            new string[] { "语音适配器", "OpenAI 协议翻译 · 情绪选音 · 预合成缓存" },
+            new string[] { "AIRI", "桌面宠物本体" },
+        };
+        Page page = new Page("compDetail" + idx);
         int x0 = Theme.Px(28);
+
+        CapsuleButton back = new CapsuleButton();
+        back.Text = "‹ 组件列表";
+        back.Size = new Size(Theme.Px(112), Theme.Px(30));
+        back.Location = new Point(x0, Theme.Px(20));
+        back.Click += delegate { ((ComponentsPage)pages["components"]).CloseDetail(false); };
+        page.Controls.Add(back);
+
         Label t = new Label();
-        t.Text = "配置";
+        t.Text = meta[idx][0];
         t.Font = Theme.FontTitle;
         t.ForeColor = Theme.Aqua;
         t.AutoSize = true;
         t.BackColor = Color.Transparent;
-        t.Location = new Point(x0, Theme.Px(22));
+        t.Location = new Point(back.Right + Theme.Px(12), Theme.Px(24));
         page.Controls.Add(t);
 
+        Label desc = new Label();
+        desc.Text = meta[idx][1];
+        desc.Font = Theme.FontSmall;
+        desc.ForeColor = Theme.Muted;
+        desc.AutoSize = true;
+        desc.BackColor = Color.Transparent;
+        desc.Location = new Point(t.Left + 2, t.Bottom + Theme.Px(4));
+        page.Controls.Add(desc);
+
         CardPanel card = new CardPanel();
-        card.Top = t.Bottom + Theme.Px(8);
+        card.Top = desc.Bottom + Theme.Px(12);
         card.Left = x0;
         card.AutoSize = true;
         card.Width = ContentW - x0 - Theme.Px(24);
+        page.Controls.Add(card);
+
         FlowLayoutPanel col = new FlowLayoutPanel();
         col.Dock = DockStyle.Top;
         col.AutoSize = true;
         col.FlowDirection = FlowDirection.TopDown;
         col.WrapContents = false;
         col.BackColor = Color.Transparent;
-        col.Controls.Add(CardTitle("组件路径"));
+        col.Controls.Add(CardTitle("配置"));
+        card.Controls.Add(col);
+
+        if (idx == 1)
+        {
+            Label info = new Label();
+            info.Text = "由启动器内置托管，无需配置。\r\n职责：输出长度前置检查（≤1000 字）、ACT 情绪分段、预合成缓存。\r\n监听地址：http://127.0.0.1:3001（随 NewAPI 网关一并启停）";
+            info.Font = Theme.FontBody;
+            info.ForeColor = Theme.Muted;
+            info.AutoSize = true;
+            info.BackColor = Color.Transparent;
+            info.Margin = new Padding(0, 0, 0, Theme.Px(6));
+            col.Controls.Add(info);
+            page.Layout += delegate
+            {
+                int cw0 = page.ClientSize.Width - x0 - Theme.Px(24);
+                if (cw0 > Theme.Px(400)) card.Width = cw0;
+            };
+            return page;
+        }
 
         TableLayoutPanel grid = new TableLayoutPanel();
-        grid.Dock = DockStyle.Top;
         grid.AutoSize = true;
         grid.ColumnCount = 4;
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 22));
-        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 24));
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 12));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 4));
         grid.BackColor = Color.Transparent;
         grid.Margin = new Padding(0);
         grid.Width = card.Width - Theme.Px(28);
+        col.Controls.Add(grid);
 
         int row = 0;
-        txtAiri = AddRow(grid, row, "AIRI 程序", delegate
+        if (idx == 0)
         {
-            string p = PickFile("选择 AIRI 主程序 (airi.exe)", "可执行文件|*.exe");
-            if (p != null) txtAiri.Text = p;
-        }, out markAiri);
-        row++;
-        txtTtsBat = AddRow(grid, row, "语音服务脚本", delegate
+            txtNewApiExe = AddRow(grid, row++, "NewAPI 程序（可空）", delegate
+            {
+                string p = PickFile("选择 NewAPI 主程序（不需要网关可跳过）", "可执行文件|*.exe");
+                if (p != null) txtNewApiExe.Text = p;
+            }, out markNewApi);
+            txtNewApiDir = AddRow(grid, row++, "NewAPI 数据目录", delegate
+            {
+                string p = PickFolder("选择 NewAPI 数据目录（含 one-api.db）");
+                if (p != null) txtNewApiDir.Text = p;
+            }, out markNewApiDir);
+            txtNewApiProbe = AddRow(grid, row++, "NewAPI 地址", null, out markNewApiProbe);
+            Label markSession;
+            txtSession = AddRow(grid, row++, "网关密钥（空=自动生成）", null, out markSession);
+        }
+        else if (idx == 2)
         {
-            string p = PickFile("选择语音服务启动脚本（bat）", "批处理|*.bat;*.cmd");
-            if (p != null) txtTtsBat.Text = p;
-        }, out markTts);
-        row++;
-        txtNewApiExe = AddRow(grid, row, "NewAPI 程序（可空）", delegate
+            txtTtsBat = AddRow(grid, row++, "语音服务脚本", delegate
+            {
+                string p = PickFile("选择语音服务启动脚本（bat）", "批处理|*.bat;*.cmd");
+                if (p != null) txtTtsBat.Text = p;
+            }, out markTts);
+            txtSoVitsProbe = AddRow(grid, row++, "语音服务地址", null, out markSoVits);
+        }
+        else if (idx == 3)
         {
-            string p = PickFile("选择 NewAPI 主程序（不需要网关可跳过）", "可执行文件|*.exe");
-            if (p != null) txtNewApiExe.Text = p;
-        }, out markNewApi);
-        row++;
-        txtNewApiDir = AddRow(grid, row, "NewAPI 数据目录", delegate
+            txtAdapterProbe = AddRow(grid, row++, "语音适配器地址", null, out markAdapter);
+        }
+        else if (idx == 4)
         {
-            string p = PickFolder("选择 NewAPI 数据目录（含 one-api.db）");
-            if (p != null) txtNewApiDir.Text = p;
-        }, out markNewApiDir);
-        row++;
-        txtNewApiProbe = AddRow(grid, row, "NewAPI 地址", null, out markNewApiProbe);
-        row++;
-        txtSoVitsProbe = AddRow(grid, row, "语音服务地址", null, out markSoVits);
-        row++;
-        txtAdapterProbe = AddRow(grid, row, "语音适配器地址", null, out markAdapter);
-        row++;
-        Label markSession;
-        txtSession = AddRow(grid, row, "网关密钥（空=自动生成）", null, out markSession);
-        row++;
-        col.Controls.Add(grid);
-        card.Controls.Add(col);
-        page.Controls.Add(card);
+            txtAiri = AddRow(grid, row++, "AIRI 程序", delegate
+            {
+                string p = PickFile("选择 AIRI 主程序 (airi.exe)", "可执行文件|*.exe");
+                if (p != null) txtAiri.Text = p;
+            }, out markAiri);
+        }
 
-        CardPanel card2 = new CardPanel();
-        card2.Top = card.Top + Theme.Px(330);
-        card2.Left = x0;
-        card2.AutoSize = true;
-        card2.Width = card.Width;
-        FlowLayoutPanel col2 = new FlowLayoutPanel();
-        col2.Dock = DockStyle.Top;
-        col2.AutoSize = true;
-        col2.FlowDirection = FlowDirection.TopDown;
-        col2.WrapContents = false;
-        col2.BackColor = Color.Transparent;
-        col2.Controls.Add(CardTitle("行为"));
-        chkAutoExit = DarkCheck("AIRI 关闭时自动退出并回收");
-        chkKeep = DarkCheck("退出时保留服务运行");
+        page.Layout += delegate
+        {
+            int cw = page.ClientSize.Width - x0 - Theme.Px(24);
+            if (cw < Theme.Px(400)) cw = Theme.Px(400);
+            card.Width = cw;
+            grid.Width = cw - Theme.Px(28);
+        };
+        return page;
+    }
+
+    internal Control BuildBehaviorCard()
+    {
+        CardPanel card = new CardPanel();
+        card.AutoSize = true;
+        FlowLayoutPanel col = new FlowLayoutPanel();
+        col.Dock = DockStyle.Top;
+        col.AutoSize = true;
+        col.FlowDirection = FlowDirection.TopDown;
+        col.WrapContents = false;
+        col.BackColor = Color.Transparent;
+        col.Controls.Add(CardTitle("行为"));
+
+        chkAutoExit = new DarkCheckBox("AIRI 关闭时自动退出并回收");
+        chkKeep = new DarkCheckBox("退出时保留服务运行");
         chkAutoExit.CheckedChanged += delegate
         {
             if (chkAutoExit.Checked && chkKeep.Checked) chkKeep.Checked = false;
+            SaveCfg();
         };
         chkKeep.CheckedChanged += delegate
         {
             if (chkKeep.Checked && chkAutoExit.Checked) chkAutoExit.Checked = false;
+            SaveCfg();
         };
         FlowLayoutPanel ck = new FlowLayoutPanel();
         ck.Dock = DockStyle.Top;
@@ -1217,28 +1463,24 @@ class MainForm : Form
         ck.BackColor = Color.Transparent;
         ck.Controls.Add(chkAutoExit);
         ck.Controls.Add(chkKeep);
-        col2.Controls.Add(ck);
+        col.Controls.Add(ck);
 
-        CapsuleButton btnSave = new CapsuleButton();
-        btnSave.Text = "保存配置";
-        btnSave.Size = new Size(Theme.Px(120), Theme.Px(32));
-        btnSave.Margin = new Padding(0, Theme.Px(8), 0, 0);
-        btnSave.Click += delegate { FieldsToCfg(); Furina.SaveIni(); Furina.Log("配置已保存到 furina.ini"); };
-        col2.Controls.Add(btnSave);
-        card2.Controls.Add(col2);
-        page.Controls.Add(card2);
+        Label hint = new Label();
+        hint.Text = "改动即时自动保存，无需手动确认。";
+        hint.Font = Theme.FontSmall;
+        hint.ForeColor = Theme.Dim;
+        hint.AutoSize = true;
+        hint.BackColor = Color.Transparent;
+        hint.Margin = new Padding(0, Theme.Px(6), 0, 0);
+        col.Controls.Add(hint);
+        card.Controls.Add(col);
+        return card;
+    }
 
-        // 页面尺寸确定后统一校正卡片宽度与第二卡片位置（窗口缩放时同步）
-        page.Layout += delegate
-        {
-            int cw = page.ClientSize.Width - x0 - Theme.Px(24);
-            if (cw < Theme.Px(400)) cw = Theme.Px(400);
-            card.Width = cw;
-            card2.Width = cw;
-            grid.Width = cw - Theme.Px(28);
-            card2.Top = card.Bottom + Theme.Px(10);
-        };
-        return page;
+    void SaveCfg()
+    {
+        FieldsToCfg();
+        Furina.SaveIni();
     }
 
     Page BuildGuidePage()
@@ -1276,8 +1518,9 @@ class MainForm : Form
         {
             CapsuleButton b = new CapsuleButton();
             b.Text = TutorialText.Titles[i].Replace(" · ", "·");
-            b.AutoSize = true;
-            b.MinimumSize = new Size(Theme.Px(110), Theme.Px(28));
+            b.Size = new Size(
+                TextRenderer.MeasureText(b.Text, Theme.FontBody).Width + Theme.Px(30),
+                Theme.Px(28));
             int idx = i;
             b.Click += delegate
             {
@@ -1539,18 +1782,101 @@ class MainForm : Form
         return l;
     }
 
-    CheckBox DarkCheck(string text)
+// ---------------------------------------------------------------
+// 深色勾选框（自绘：原生 CheckBox 的勾在深色卡片上不可见）
+// ---------------------------------------------------------------
+class DarkCheckBox : Control
+{
+    bool _checked;
+    public event EventHandler CheckedChanged;
+    double hoverT, checkT;
+    bool _hover;
+    System.Windows.Forms.Timer anim;
+
+    public DarkCheckBox(string text)
     {
-        CheckBox c = new CheckBox();
-        c.Text = text;
-        c.AutoSize = true;
-        c.Font = Theme.FontBody;
-        c.ForeColor = Theme.Ink;
-        c.BackColor = Color.Transparent;
-        c.FlatStyle = FlatStyle.Flat;
-        c.Margin = new Padding(0, 2, Theme.Px(20), 2);
-        return c;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+            | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw
+            | ControlStyles.SupportsTransparentBackColor, true);
+        Text = text;
+        Font = Theme.FontBody;
+        BackColor = Color.Transparent;
+        Height = Theme.Px(26);
+        Width = Theme.Px(30) + TextRenderer.MeasureText(Text, Font).Width + Theme.Px(10);
+        Margin = new Padding(0, 2, Theme.Px(22), 2);
+        Cursor = Cursors.Hand;
+        anim = new System.Windows.Forms.Timer();
+        anim.Interval = 16;
+        anim.Tick += delegate
+        {
+            double ht = _hover ? 1 : 0, ct = _checked ? 1 : 0;
+            hoverT += (ht - hoverT) * 0.35;
+            checkT += (ct - checkT) * 0.45;
+            Invalidate();
+            if (Math.Abs(hoverT - ht) < 0.01 && Math.Abs(checkT - ct) < 0.01) anim.Stop();
+        };
     }
+
+    public bool Checked
+    {
+        get { return _checked; }
+        set
+        {
+            if (_checked == value) return;
+            _checked = value;
+            anim.Start();
+            Invalidate();
+            if (CheckedChanged != null) CheckedChanged(this, EventArgs.Empty);
+        }
+    }
+
+    protected override void OnClick(EventArgs e)
+    {
+        Checked = !Checked;
+        base.OnClick(e);
+    }
+
+    protected override void OnMouseEnter(EventArgs e) { _hover = true; anim.Start(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { _hover = false; anim.Start(); base.OnMouseLeave(e); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (Width <= 0 || Height <= 0) return;
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        int box = Theme.Px(16);
+        int by = (Height - box) / 2;
+        Rectangle r = new Rectangle(1, by, box, box);
+        double t = Theme.EaseOut(checkT);
+        using (GraphicsPath path = Theme.RoundRect(r, Theme.Px(5)))
+        {
+            Color fill = Theme.Lerp(Theme.FieldBg, Theme.AquaDeep, t);
+            using (SolidBrush br = new SolidBrush(fill)) g.FillPath(br, path);
+            Color border = Theme.Lerp(Theme.Lerp(Theme.PanelBorder, Theme.Aqua, hoverT * 0.6), Theme.Aqua, t);
+            using (Pen pen = new Pen(border, 1.4f)) g.DrawPath(pen, path);
+        }
+        if (t > 0.03)
+        {
+            using (Pen pen = new Pen(Color.FromArgb((int)(255 * t), Color.FromArgb(8, 18, 38)), 2.2f))
+            {
+                pen.StartCap = LineCap.Round;
+                pen.EndCap = LineCap.Round;
+                float u = box / 16f;
+                g.DrawLines(pen, new PointF[]
+                {
+                    new PointF(1 + 3.6f * u, by + 8.4f * u),
+                    new PointF(1 + 7.0f * u, by + 11.8f * u),
+                    new PointF(1 + 12.6f * u, by + 4.6f * u),
+                });
+            }
+        }
+        using (SolidBrush br = new SolidBrush(Theme.Lerp(Theme.Muted, Theme.Ink, Math.Max(hoverT, (float)t))))
+        {
+            TextRenderer.DrawText(g, Text, Font, new Point(Theme.Px(24), Height / 2), br.Color,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+        }
+    }
+}
 
     TextBox AddRow(TableLayoutPanel grid, int row, string label, EventHandler onBrowse, out Label mark)
     {
