@@ -104,7 +104,7 @@ class Program
         t.Interval = 600;
         t.Tick += delegate
         {
-            if (idx >= order.Length) { t.Stop(); Application.Exit(); return; }
+            if (idx >= order.Length) { t.Stop(); RunAnimShot(f); return; }
             if (!captured)
             {
                 try
@@ -133,6 +133,35 @@ class Program
             }
         };
         t.Start();
+    }
+
+    // 动画过渡残影验证：动画切页的中段与收尾各截一帧
+    static void RunAnimShot(MainForm f)
+    {
+        f.NavigateInstant("home");
+        int phase = 0;
+        System.Windows.Forms.Timer t2 = new System.Windows.Forms.Timer();
+        t2.Interval = 130;
+        t2.Tick += delegate
+        {
+            phase++;
+            if (phase == 1) { f.Navigate("components"); return; }
+            try
+            {
+                f.Activate();
+                f.Refresh();
+                Rectangle r = new Rectangle(f.PointToScreen(Point.Empty), f.Size);
+                using (Bitmap bmp = new Bitmap(r.Width, r.Height))
+                using (Graphics g = Graphics.FromImage(bmp))
+                {
+                    g.CopyFromScreen(r.Location, Point.Empty, r.Size);
+                    bmp.Save(Path.Combine(Furina.baseDir, phase == 2 ? "selfshot_anim_mid.png" : "selfshot_anim_end.png"));
+                }
+            }
+            catch { }
+            if (phase >= 3) { t2.Stop(); Application.Exit(); }
+        };
+        t2.Start();
     }
 
     static bool ConfigComplete(Furina.Cfg c)
@@ -569,6 +598,65 @@ class Page : Panel
 }
 
 // ---------------------------------------------------------------
+// 快照过渡表面：两个页面的位图在单一表面上做位移动画
+// （不移动 HWND，16ms 逐帧 Invalidate 也只重画两张图，无残影）
+// ---------------------------------------------------------------
+class SlideTransition : Control
+{
+    Bitmap fromBmp, toBmp;
+    int dir;
+    double t;
+    System.Windows.Forms.Timer timer;
+
+    public SlideTransition(Bitmap fromBmp, Bitmap toBmp, int dir, Action<SlideTransition> finished)
+    {
+        this.fromBmp = fromBmp;
+        this.toBmp = toBmp;
+        this.dir = dir;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+            | ControlStyles.OptimizedDoubleBuffer, true);
+        timer = new System.Windows.Forms.Timer();
+        timer.Interval = 16;
+        double start = Environment.TickCount / 1000.0;
+        timer.Tick += delegate
+        {
+            t = Math.Min(1.0, (Environment.TickCount / 1000.0 - start) / 0.28);
+            Invalidate();
+            if (t >= 1)
+            {
+                timer.Stop();
+                if (finished != null) finished(this);
+            }
+        };
+    }
+
+    public void Begin() { timer.Start(); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (Width <= 0 || Height <= 0) return;
+        Graphics g = e.Graphics;
+        double ez = Theme.EaseOut(t);
+        int toX = (int)Math.Round(dir * Width * (1 - ez));
+        int fromX = -(int)Math.Round(dir * Width * 0.3 * ez);
+        g.DrawImageUnscaled(fromBmp, fromX, 0);
+        g.DrawImageUnscaled(toBmp, toX, 0);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            timer.Stop();
+            timer.Dispose();
+            if (fromBmp != null) fromBmp.Dispose();
+            if (toBmp != null) toBmp.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+}
+
+// ---------------------------------------------------------------
 // 主页
 // ---------------------------------------------------------------
 class HomePage : Page
@@ -747,17 +835,16 @@ class ComponentsPage : Page
 {
     MainForm owner;
     Panel listHost;
-    Label hint;
+    Label t, hint;
     internal Page[] details = new Page[5];
     Page activeDetail;
     bool detailOpen;
-    System.Windows.Forms.Timer slideTimer;
 
     public ComponentsPage(MainForm owner) : base("components")
     {
         this.owner = owner;
         int x0 = Theme.Px(32);
-        Label t = new Label();
+        t = new Label();
         t.Text = "组件";
         t.Font = Theme.FontTitle;
         t.ForeColor = Theme.Aqua;
@@ -822,19 +909,52 @@ class ComponentsPage : Page
         };
     }
 
-    // 二级配置页：从右侧推入覆盖列表（iOS 推入式，与 AIRI 设置同语言）
+    // detail 打开时，列表与标题在真实显示中被 detail 覆盖；
+    // 截图（WM_PRINT）的子控件绘制顺序与视觉层级相反，需同步隐藏以保持快照一致
+    internal void SyncUnderlayVisibility()
+    {
+        bool covered = detailOpen && activeDetail != null;
+        if (t != null) t.Visible = !covered;
+        if (listHost != null) listHost.Visible = !covered;
+    }
+
+    // 二级配置页：快照过渡推入（不移动 HWND，无残影）
     internal void OpenDetail(int idx, bool instant)
     {
         Page d = details[idx];
         if (d == null) return;
         if (detailOpen && activeDetail == d) return;
         if (d.Parent == null) Controls.Add(d);
-        d.Bounds = new Rectangle(instant ? 0 : Width, 0, Width, Height);
+        d.Bounds = new Rectangle(0, 0, Width, Height);
+        if (instant)
+        {
+            d.Visible = true;
+            d.BringToFront();
+            activeDetail = d;
+            detailOpen = true;
+            SyncUnderlayVisibility();
+            return;
+        }
+        Bitmap fromBmp = MainForm.Shot(this);
+        d.PerformLayout();
         d.Visible = true;
-        d.BringToFront();
+        Bitmap toBmp = MainForm.Shot(d);
+        d.Visible = false;
         activeDetail = d;
         detailOpen = true;
-        if (!instant) SlideTo(d, 0, null);
+        SlideTransition tr = new SlideTransition(fromBmp, toBmp, 1, delegate(SlideTransition self)
+        {
+            d.Left = 0;
+            d.Visible = true;
+            d.BringToFront();
+            SyncUnderlayVisibility();
+            Controls.Remove(self);
+            self.Dispose();
+        });
+        tr.Bounds = new Rectangle(0, 0, Width, Height);
+        Controls.Add(tr);
+        tr.BringToFront();
+        tr.Begin();
     }
 
     internal void CloseDetail(bool instant)
@@ -843,29 +963,21 @@ class ComponentsPage : Page
         Page d = activeDetail;
         detailOpen = false;
         activeDetail = null;
-        if (instant) { d.Visible = false; d.Left = 0; return; }
-        SlideTo(d, Width, delegate { d.Visible = false; d.Left = 0; });
-    }
-
-    void SlideTo(Page d, int toX, Action done)
-    {
-        if (slideTimer != null) slideTimer.Stop();
-        slideTimer = new System.Windows.Forms.Timer();
-        slideTimer.Interval = 16;
-        double start = Environment.TickCount / 1000.0;
-        int fromX = d.Left;
-        slideTimer.Tick += delegate
+        if (instant) { d.Visible = false; d.Left = 0; SyncUnderlayVisibility(); return; }
+        Bitmap fromBmp = MainForm.Shot(d);
+        d.Visible = false;
+        d.Left = 0;
+        SyncUnderlayVisibility();
+        Bitmap toBmp = MainForm.Shot(this);
+        SlideTransition tr = new SlideTransition(fromBmp, toBmp, -1, delegate(SlideTransition self)
         {
-            double p = Math.Min(1.0, (Environment.TickCount / 1000.0 - start) / 0.28);
-            double e = Theme.EaseOut(p);
-            d.Left = fromX + (int)Math.Round((toX - fromX) * e);
-            if (p >= 1)
-            {
-                slideTimer.Stop();
-                if (done != null) done();
-            }
-        };
-        slideTimer.Start();
+            Controls.Remove(self);
+            self.Dispose();
+        });
+        tr.Bounds = new Rectangle(0, 0, Width, Height);
+        Controls.Add(tr);
+        tr.BringToFront();
+        tr.Begin();
     }
 }
 
@@ -1126,9 +1238,7 @@ class MainForm : Form
     Dictionary<string, Page> pages = new Dictionary<string, Page>();
     string[] navOrder = { "home", "components", "guide", "logs" };
     Page currentPage;
-    System.Windows.Forms.Timer slideTimer;
-    int slideDir;
-    Page slidePage;
+    SlideTransition activeTr;
 
     internal StatusPill[] Pills = new StatusPill[5];
     internal List<StatusPill> AllPills = new List<StatusPill>();
@@ -1596,6 +1706,14 @@ class MainForm : Form
     internal void Navigate(string key) { Navigate(key, false, false); }
     internal void NavigateInstant(string key) { Navigate(key, true, true); }
 
+    // 控件内容快照（WM_PRINT 强制绘制，隐藏控件亦可截取）
+    internal static Bitmap Shot(Control c)
+    {
+        Bitmap b = new Bitmap(Math.Max(1, c.Width), Math.Max(1, c.Height));
+        c.DrawToBitmap(b, new Rectangle(0, 0, c.Width, c.Height));
+        return b;
+    }
+
     void Navigate(string key, bool silent, bool instant)
     {
         if (!pages.ContainsKey(key)) return;
@@ -1614,37 +1732,51 @@ class MainForm : Form
             return;
         }
 
-        int dir = Array.IndexOf(navOrder, key) > Array.IndexOf(navOrder, currentPage.Key) ? 1 : -1;
-        slideDir = dir;
-        slidePage = target;
-        target.Visible = true;
-        target.Left = dir * contentPanel.Width;
-        target.BringToFront();
-        target.SetBounds(target.Left, 0, contentPanel.Width, contentPanel.Height);
-
-        if (slideTimer != null) slideTimer.Stop();
-        slideTimer = new System.Windows.Forms.Timer();
-        slideTimer.Interval = 16;
-        double start = Environment.TickCount / 1000.0;
-        int fromX = target.Left;
-        Page old = currentPage;
-        int oldFromX = old.Left;
-        slideTimer.Tick += delegate
+        // 上一次过渡未播完就被打断：先强制收场，保证只有 currentPage 可见
+        if (activeTr != null)
         {
-            double p = Math.Min(1.0, (Environment.TickCount / 1000.0 - start) / 0.28);
-            double e = Theme.EaseOut(p);
-            slidePage.Left = fromX - (int)Math.Round(dir * contentPanel.Width * e);
-            old.Left = oldFromX - (int)Math.Round(dir * contentPanel.Width * 0.3 * e);
-            if (p >= 1)
-            {
-                slideTimer.Stop();
-                old.Visible = false;
-                old.Left = 0;
-                slidePage.Left = 0;
-                currentPage = slidePage;
-            }
-        };
-        slideTimer.Start();
+            contentPanel.Controls.Remove(activeTr);
+            activeTr.Dispose();
+            activeTr = null;
+            foreach (Page p in pages.Values)
+                if (p != currentPage) { p.Visible = false; p.Left = 0; }
+            currentPage.Visible = true;
+            currentPage.Left = 0;
+            currentPage.BringToFront();
+        }
+
+        Page old = currentPage;
+        int dir = Array.IndexOf(navOrder, key) > Array.IndexOf(navOrder, old.Key) ? 1 : -1;
+
+        // 快照过渡：两个页面各截一张位图，在单个表面上做纯位移动画。
+        // 不移动任何 HWND，根绝滑动残影/叠影。
+        old.SetBounds(0, 0, contentPanel.Width, contentPanel.Height);
+        Bitmap fromBmp = Shot(old);
+        target.SetBounds(0, 0, contentPanel.Width, contentPanel.Height);
+        target.PerformLayout();
+        target.Visible = true;
+        if (target is ComponentsPage) ((ComponentsPage)target).SyncUnderlayVisibility();
+        Bitmap toBmp = Shot(target);
+        target.Visible = false;
+        currentPage = target;
+
+        Page oldPage = old, targetPage = target;
+        SlideTransition tr = new SlideTransition(fromBmp, toBmp, dir, delegate(SlideTransition self)
+        {
+            oldPage.Visible = false;
+            oldPage.Left = 0;
+            targetPage.Left = 0;
+            targetPage.Visible = true;
+            targetPage.BringToFront();
+            contentPanel.Controls.Remove(self);
+            self.Dispose();
+            activeTr = null;
+        });
+        tr.Bounds = new Rectangle(0, 0, contentPanel.Width, contentPanel.Height);
+        contentPanel.Controls.Add(tr);
+        tr.BringToFront();
+        activeTr = tr;
+        tr.Begin();
     }
 
     // ---------------------------------------------------------------
