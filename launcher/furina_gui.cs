@@ -1,16 +1,14 @@
 // -*- coding: utf-8 -*-
 /*
- * furina_gui.cs - 芙宁娜整合启动器图形界面（枫丹夜海 · Hallmark 重制）
+ * furina_gui.cs - 芙宁娜整合启动器图形界面（产品级重制 · 枫丹夜海）
  *
- * 主题：枫丹夜海。荒形态（深海军蓝）= 运行态；芒形态（浅湖蓝）= 启动画面。
- * 令牌：Theme 静态类集中定义（枫丹夜海调色板 + 字阶 + 时长 + 缓动）。
- * 动效：胶囊按钮 hover/press 缓动插值、状态灯色彩过渡、卡片入场错峰滑入，
- *       全部 transform/不透明度域、指数缓出，贴显示器刷新率渲染。
+ * 产品形态：左侧图标导航栏 + 五页面（主页/组件/配置/教程/日志），
+ * 页面右滑进入切换，导航 hover/选中动效，组件页图标行 + 悬停反馈。
+ * 设计基准：AIRI 设置页的产品语言（图标行、hover 反应、丝滑二级页）×
+ * 枫丹夜海调色板。令牌集中在 Theme；动效只做 transform/opacity 域。
  *
- * 行为层与旧版完全一致：组件路径校验、行为互斥、自动启动、看门狗对接、教程。
- *
- * 不带参数双击 = GUI；--console / --exit-after=N 走控制台模式；
- * --selfshot 输出一张界面自检截图（launcher\selfshot.png）后退出，不进自动启动。
+ * 行为层与前版完全一致：配置校验、行为互斥、自动启动、看门狗对接。
+ * 不带参数双击 = GUI；--console/--exit-after=N 控制台；--selfshot 自检截图。
  */
 using System;
 using System.Collections.Generic;
@@ -50,8 +48,6 @@ class Program
         };
         Furina.InitPaths();
 
-        // DPI 系数先行：一个临时窗体读取当前显示器 DPI（96 基准），
-        // 之后所有像素值经 Theme.Px() 缩放，字体（pt）自带 DPI 感知不再重复放大
         try
         {
             using (Form probe = new Form())
@@ -98,34 +94,37 @@ class Program
 
     static void RunSelfShot(MainForm f)
     {
+        // 逐页截图：home -> components -> settings -> guide -> logs
+        // 两拍制：本拍截图、下一拍切页（滑动动画在计时器间隔内完成，不阻塞 UI 线程）
+        string[] order = { "home", "components", "settings", "guide", "logs" };
+        int idx = 0;
+        bool captured = false;
         System.Windows.Forms.Timer t = new System.Windows.Forms.Timer();
-        t.Interval = 1500;
+        t.Interval = 600;
         t.Tick += delegate
         {
-            t.Stop();
-            try
+            if (idx >= order.Length) { t.Stop(); Application.Exit(); return; }
+            if (!captured)
             {
-                f.Activate();
-                Rectangle r = new Rectangle(f.PointToScreen(Point.Empty), f.Size);
-                using (Bitmap bmp = new Bitmap(r.Width, r.Height))
-                using (Graphics g = Graphics.FromImage(bmp))
+                try
                 {
-                    g.CopyFromScreen(r.Location, Point.Empty, r.Size);
-                    bmp.Save(Path.Combine(Furina.baseDir, "selfshot.png"));
+                    f.SnapNavForShot();
+                    f.Activate();
+                    f.Refresh();
+                    Rectangle r = new Rectangle(f.PointToScreen(Point.Empty), f.Size);
+                    using (Bitmap bmp = new Bitmap(r.Width, r.Height))
+                    using (Graphics g = Graphics.FromImage(bmp))
+                    {
+                        g.CopyFromScreen(r.Location, Point.Empty, r.Size);
+                        bmp.Save(Path.Combine(Furina.baseDir, "selfshot_" + order[idx] + ".png"));
+                    }
                 }
-                StringBuilder sb = new StringBuilder();
-                sb.AppendLine("form=" + f.Size);
-                for (int i = 0; i < f.entranceCards.Count; i++)
-                {
-                    CardPanel c = f.entranceCards[i];
-                    sb.AppendLine("card" + i + " bounds=" + c.Bounds + " children=" + c.Controls.Count);
-                    foreach (Control ch in c.Controls)
-                        sb.AppendLine("  child " + ch.GetType().Name + " bounds=" + ch.Bounds + " children=" + ch.Controls.Count);
-                }
-                File.WriteAllText(Path.Combine(Furina.baseDir, "selfshot_debug.txt"), sb.ToString(), Encoding.UTF8);
+                catch { }
+                captured = true;
+                return;
             }
-            catch (Exception ex) { try { File.WriteAllText(Path.Combine(Furina.baseDir, "selfshot_debug.txt"), ex.ToString()); } catch { } }
-            Application.Exit();
+            idx++;
+            if (idx < order.Length) { f.NavigateInstant(order[idx]); captured = false; }
         };
         t.Start();
     }
@@ -159,44 +158,39 @@ class Program
 // ---------------------------------------------------------------
 static class Theme
 {
-    // 荒形态 · 深海军蓝（运行态）
-    public static readonly Color BgTop = Color.FromArgb(15, 23, 52);      // 夜空
-    public static readonly Color BgBottom = Color.FromArgb(9, 14, 32);    // 深海
-    public static readonly Color Panel = Color.FromArgb(20, 31, 64);      // 卡片
-    public static readonly Color PanelBorder = Color.FromArgb(42, 60, 100);  // 发丝边
-    public static readonly Color FieldBg = Color.FromArgb(14, 24, 56);    // 输入框
-    public static readonly Color Ink = Color.FromArgb(234, 242, 251);     // 主文字
-    public static readonly Color Muted = Color.FromArgb(160, 180, 210);   // 次文字
-    public static readonly Color Aqua = Color.FromArgb(103, 232, 249);    // 湖水青（主强调）
-    public static readonly Color AquaDeep = Color.FromArgb(56, 189, 248); // 深青
-    public static readonly Color Gold = Color.FromArgb(231, 198, 107);    // 金饰（仅点饰）
-    public static readonly Color Ok = Color.FromArgb(110, 231, 183);      // 运行
-    public static readonly Color Err = Color.FromArgb(248, 113, 113);     // 异常
-    public static readonly Color Dim = Color.FromArgb(70, 88, 128);       // 未启用灰蓝
+    public static readonly Color BgTop = Color.FromArgb(15, 23, 52);
+    public static readonly Color BgBottom = Color.FromArgb(9, 14, 32);
+    public static readonly Color Panel = Color.FromArgb(20, 31, 64);
+    public static readonly Color PanelBorder = Color.FromArgb(42, 60, 100);
+    public static readonly Color FieldBg = Color.FromArgb(14, 24, 56);
+    public static readonly Color NavBg = Color.FromArgb(12, 19, 44);
+    public static readonly Color NavHover = Color.FromArgb(30, 44, 80);
+    public static readonly Color Ink = Color.FromArgb(234, 242, 251);
+    public static readonly Color Muted = Color.FromArgb(160, 180, 210);
+    public static readonly Color Aqua = Color.FromArgb(103, 232, 249);
+    public static readonly Color AquaDeep = Color.FromArgb(56, 189, 248);
+    public static readonly Color Gold = Color.FromArgb(231, 198, 107);
+    public static readonly Color Ok = Color.FromArgb(110, 231, 183);
+    public static readonly Color Err = Color.FromArgb(248, 113, 113);
+    public static readonly Color Dim = Color.FromArgb(70, 88, 128);
 
-    // 芒形态 · 浅湖蓝（启动画面）
     public static readonly Color SplashTop = Color.FromArgb(247, 251, 255);
     public static readonly Color SplashBottom = Color.FromArgb(219, 238, 250);
 
-    // 字阶
-    public static readonly Font FontBrand = new Font("幼圆", 15, FontStyle.Bold);
+    public static readonly Font FontBrand = new Font("幼圆", 16, FontStyle.Bold);
+    public static readonly Font FontHero = new Font("幼圆", 24, FontStyle.Bold);
     public static readonly Font FontTitle = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold);
     public static readonly Font FontBody = new Font("Microsoft YaHei UI", 9.5f);
     public static readonly Font FontSmall = new Font("Microsoft YaHei UI", 8.5f);
     public static readonly Font FontLog = new Font("Consolas", 9.5f);
+    public const string FontIcons = "Segoe MDL2 Assets";
 
-    // 动效：时长三档 + 指数缓出（Apple 风格）
     public const int DurMicro = 120, DurShort = 220, DurLong = 420;
 
-    // DPI 缩放系数（96dpi 基准）：像素值统一走 Px()；字体为 pt 单位已自带 DPI 感知
     public static float S = 1f;
+    public static int Px(int v) { return (int)Math.Round(v * S); }
 
-    public static int Px(int v)
-    {
-        return (int)Math.Round(v * S);
-    }
-
-    public static double EaseOut(double t)   // cubic-bezier(0.16,1,0.3,1) 近似
+    public static double EaseOut(double t)
     {
         double u = 1 - Math.Min(1, Math.Max(0, t));
         return 1 - u * u * u;
@@ -225,16 +219,16 @@ static class Theme
 }
 
 // ---------------------------------------------------------------
-// 自定义控件：胶囊按钮（hover 抬升 + 色彩缓动 + 按压下沉）
+// 胶囊按钮
 // ---------------------------------------------------------------
 class CapsuleButton : Control
 {
-    public Color BaseColor = Theme.Panel;
-    public Color HoverColor = Theme.Panel;
-    public Color AccentColor = Color.Empty;   // 非空 = 描边强调
+    public Color BaseColor = Color.FromArgb(32, 48, 88);
+    public Color HoverColor = Color.FromArgb(45, 65, 110);
+    public Color AccentColor = Color.Empty;
     double hoverT, pressT;
-    System.Windows.Forms.Timer anim;
     bool hoverGoal, pressGoal;
+    System.Windows.Forms.Timer anim;
 
     public CapsuleButton()
     {
@@ -242,22 +236,16 @@ class CapsuleButton : Control
             | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
         Font = Theme.FontBody;
         ForeColor = Theme.Ink;
-        BackColor = Theme.Panel;   // 圆角外角部融入卡片底色
-        // 默认色比面板亮一档；hover 渐亮向湖水青
-        BaseColor = Color.FromArgb(32, 48, 88);
-        HoverColor = Theme.Lerp(Color.FromArgb(32, 48, 88), Theme.AquaDeep, 0.4);
+        BackColor = Theme.Panel;
         anim = new System.Windows.Forms.Timer();
         anim.Interval = 16;
         anim.Tick += delegate
         {
             double ht = hoverGoal ? 1 : 0, pt = pressGoal ? 1 : 0;
-            bool dirty = false;
-            double nh = hoverT + (ht - hoverT) * 0.28;
-            double np = pressT + (pt - pressT) * 0.4;
-            if (Math.Abs(nh - hoverT) > 0.002) { hoverT = nh; dirty = true; } else hoverT = ht;
-            if (Math.Abs(np - pressT) > 0.002) { pressT = np; dirty = true; } else pressT = pt;
-            if (dirty) Invalidate();
-            else anim.Stop();
+            hoverT += (ht - hoverT) * 0.28;
+            pressT += (pt - pressT) * 0.4;
+            Invalidate();
+            if (hoverT == ht && pressT == pt) anim.Stop();
         };
     }
 
@@ -291,15 +279,16 @@ class CapsuleButton : Control
 }
 
 // ---------------------------------------------------------------
-// 自定义控件：状态胶囊（圆点 + 文字，色彩随状态平滑过渡）
+// 状态胶囊
 // ---------------------------------------------------------------
 class StatusPill : Control
 {
     Color target = Theme.Dim;
-    double blend; // 0=当前色, 1=目标色
+    double blend;
     Color current = Theme.Dim;
     System.Windows.Forms.Timer anim;
     string state = "--";
+    public string Name_;
 
     public StatusPill(string name)
     {
@@ -307,25 +296,22 @@ class StatusPill : Control
             | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
         Font = Theme.FontSmall;
         Size = new Size(Theme.Px(104), Theme.Px(24));
-        BackColor = Theme.Panel;   // 圆角外角部与卡片底色一致，不露出系统灰
+        BackColor = Theme.Panel;
         Name_ = name;
         anim = new System.Windows.Forms.Timer();
         anim.Interval = 16;
         anim.Tick += delegate
         {
-            double nb = blend + 0.25;
-            if (nb >= 1) { blend = 1; anim.Stop(); } else blend = nb;
+            blend = Math.Min(1, blend + 0.25);
             Invalidate();
+            if (blend >= 1) anim.Stop();
         };
     }
-
-    public string Name_;
 
     public void SetState(string text, Color color)
     {
         if (state == text) return;
         state = text;
-        current = Color.FromArgb(current.R, current.G, current.B);
         blend = 0;
         target = color;
         anim.Start();
@@ -354,7 +340,7 @@ class StatusPill : Control
 }
 
 // ---------------------------------------------------------------
-// 自定义控件：圆角卡片（面板）——发丝边 + 顶部微高光
+// 圆角卡片
 // ---------------------------------------------------------------
 class CardPanel : Panel
 {
@@ -371,21 +357,344 @@ class CardPanel : Panel
         Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
-        using (GraphicsPath path = Theme.RoundRect(r, 14))
+        using (GraphicsPath path = Theme.RoundRect(r, Theme.Px(14)))
         {
             using (SolidBrush br = new SolidBrush(Theme.Panel))
                 g.FillPath(br, path);
             using (Pen pen = new Pen(Theme.PanelBorder, 1f))
                 g.DrawPath(pen, path);
             using (Pen hi = new Pen(Color.FromArgb(26, 255, 255, 255), 1f))
-                g.DrawLine(hi, 14, 1, Width - 14, 1);
+                g.DrawLine(hi, Theme.Px(14), 1, Width - Theme.Px(14), 1);
         }
         base.OnPaint(e);
     }
 }
 
 // ---------------------------------------------------------------
-// 启动画面（芒形态 · 浅湖蓝）
+// 导航项（图标 + 文字，hover 渐亮 + 选中指示条）
+// ---------------------------------------------------------------
+class NavItem : Control
+{
+    public string Glyph;
+    public string Title;
+    public string Key;
+    public bool Selected;
+    double hoverT, selectT;
+    System.Windows.Forms.Timer anim;
+
+    public NavItem(string glyph, string title, string key)
+    {
+        Glyph = glyph;
+        Title = title;
+        Key = key;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+            | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+        BackColor = Theme.NavBg;
+        Size = new Size(Theme.Px(180), Theme.Px(44));
+        anim = new System.Windows.Forms.Timer();
+        anim.Interval = 16;
+        anim.Tick += delegate
+        {
+            double ht = _hover ? 1 : 0, st = Selected ? 1 : 0;
+            hoverT += (ht - hoverT) * 0.3;
+            selectT += (st - selectT) * 0.25;
+            Invalidate();
+            if (Math.Abs(hoverT - ht) < 0.004 && Math.Abs(selectT - st) < 0.004) anim.Stop();
+        };
+    }
+
+    bool _hover;
+    protected override void OnMouseEnter(EventArgs e) { _hover = true; anim.Start(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { _hover = false; anim.Start(); base.OnMouseLeave(e); }
+
+    public void SetSelected(bool v)
+    {
+        Selected = v;
+        anim.Start();
+        Invalidate();
+    }
+
+    // 自检截图用：直接跳到动画终态，避免渐变计时器饿死在定时器风暴里
+    public void Snap()
+    {
+        hoverT = _hover ? 1 : 0;
+        selectT = Selected ? 1 : 0;
+        anim.Stop();
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        Color bg = Theme.Lerp(BackColor, Theme.NavHover, Math.Min(1, hoverT + selectT * 0.6));
+        using (SolidBrush br = new SolidBrush(bg)) g.FillRectangle(br, ClientRectangle);
+        if (selectT > 0.02)
+        {
+            using (SolidBrush br = new SolidBrush(Color.FromArgb((int)(230 * selectT), Theme.Aqua)))
+                g.FillRectangle(br, 0, Theme.Px(10), Theme.Px(3), Height - Theme.Px(20));
+        }
+        Color iconColor = Theme.Lerp(Theme.Muted, Theme.Aqua, Math.Min(1, hoverT + selectT));
+        using (Font f = new Font(Theme.FontIcons, 11))
+        using (SolidBrush br = new SolidBrush(iconColor))
+        {
+            g.DrawString(Glyph, f, br, Theme.Px(16), Height / 2 - Theme.Px(10));
+        }
+        using (SolidBrush br = new SolidBrush(Theme.Lerp(Theme.Muted, Theme.Ink, Math.Min(1, hoverT + selectT))))
+        {
+            g.DrawString(Title, Theme.FontBody, br, Theme.Px(48), Height / 2 - Theme.Px(9));
+        }
+    }
+}
+
+// ---------------------------------------------------------------
+// 页面容器（可滑动的内容宿主）
+// ---------------------------------------------------------------
+class Page : Panel
+{
+    public string Key;
+    public Page(string key)
+    {
+        Key = key;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+            | ControlStyles.OptimizedDoubleBuffer, true);
+        BackColor = Color.Transparent;
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Graphics g = e.Graphics;
+        using (LinearGradientBrush br = new LinearGradientBrush(
+            ClientRectangle, Theme.BgTop, Theme.BgBottom, LinearGradientMode.Vertical))
+        {
+            g.FillRectangle(br, ClientRectangle);
+        }
+        base.OnPaint(e);
+    }
+}
+
+// ---------------------------------------------------------------
+// 主页
+// ---------------------------------------------------------------
+class HomePage : Page
+{
+    public CapsuleButton BtnMain;
+    public CapsuleButton BtnToSettings, BtnToGuide;
+    public StatusPill[] Pills = new StatusPill[5];
+    public Label LblHint;
+
+    public HomePage(MainForm owner) : base("home")
+    {
+        int w = owner.ContentW, x0 = Theme.Px(48);
+        Label brand = new Label();
+        brand.Text = "芙宁娜";
+        brand.Font = Theme.FontHero;
+        brand.ForeColor = Theme.Aqua;
+        brand.AutoSize = true;
+        brand.BackColor = Color.Transparent;
+        brand.Location = new Point(x0, Theme.Px(56));
+        Controls.Add(brand);
+
+        Label sub = new Label();
+        sub.Text = "住在桌面上的她 · 一键拉起的全部世界";
+        sub.Font = Theme.FontBody;
+        sub.ForeColor = Theme.Muted;
+        sub.AutoSize = true;
+        sub.BackColor = Color.Transparent;
+        sub.Location = new Point(x0 + 2, brand.Bottom + Theme.Px(8));
+        Controls.Add(sub);
+
+        BtnMain = new CapsuleButton();
+        BtnMain.Text = "▶ 启动全部组件";
+        BtnMain.Font = new Font("Microsoft YaHei UI", 11, FontStyle.Bold);
+        BtnMain.Size = new Size(Theme.Px(210), Theme.Px(44));
+        BtnMain.BaseColor = Theme.Lerp(Theme.AquaDeep, Color.Black, 0.55);
+        BtnMain.HoverColor = Theme.Lerp(Theme.AquaDeep, Color.Black, 0.35);
+        BtnMain.Location = new Point(x0, sub.Bottom + Theme.Px(28));
+        BtnMain.Click += delegate { owner.ToggleRun(); };
+        Controls.Add(BtnMain);
+
+        BtnToGuide = new CapsuleButton();
+        BtnToGuide.Text = "使用教程";
+        BtnToGuide.Size = new Size(Theme.Px(120), Theme.Px(44));
+        BtnToGuide.AccentColor = Theme.Gold;
+        BtnToGuide.Location = new Point(BtnMain.Right + Theme.Px(14), BtnMain.Top);
+        BtnToGuide.Click += delegate { owner.Navigate("guide"); };
+        Controls.Add(BtnToGuide);
+
+        BtnToSettings = new CapsuleButton();
+        BtnToSettings.Text = "组件配置";
+        BtnToSettings.Size = new Size(Theme.Px(120), Theme.Px(44));
+        BtnToSettings.Location = new Point(BtnToGuide.Right + Theme.Px(14), BtnMain.Top);
+        BtnToSettings.Click += delegate { owner.Navigate("settings"); };
+        Controls.Add(BtnToSettings);
+
+        Label st = new Label();
+        st.Text = "全部组件";
+        st.Font = Theme.FontTitle;
+        st.ForeColor = Theme.Aqua;
+        st.AutoSize = true;
+        st.BackColor = Color.Transparent;
+        st.Location = new Point(x0, BtnMain.Bottom + Theme.Px(40));
+        Controls.Add(st);
+
+        string[] names = { "NewAPI", "LLM守卫", "语音服务", "语音适配器", "AIRI" };
+        for (int i = 0; i < 5; i++)
+        {
+            Pills[i] = new StatusPill(names[i]);
+            Pills[i].Tag = i;
+            Pills[i].Location = new Point(x0 + i * (Theme.Px(112)), st.Bottom + Theme.Px(10));
+            Controls.Add(Pills[i]);
+            owner.AllPills.Add(Pills[i]);
+        }
+
+        LblHint = new Label();
+        LblHint.Text = "双击启动器即可使用：配置完整时将自动启动全部组件。";
+        LblHint.Font = Theme.FontSmall;
+        LblHint.ForeColor = Theme.Dim;
+        LblHint.AutoSize = true;
+        LblHint.BackColor = Color.Transparent;
+        LblHint.Location = new Point(x0, Pills[0].Bottom + Theme.Px(28));
+        Controls.Add(LblHint);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        // 底部波缘（参考图1 的水波语言，低透明度曲线）
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        Rectangle r = ClientRectangle;
+        using (Pen p1 = new Pen(Color.FromArgb(28, Theme.Aqua), 2.5f))
+        using (Pen p2 = new Pen(Color.FromArgb(18, Theme.Aqua), 2f))
+        {
+            g.DrawBezier(p1, -40, r.Bottom - Theme.Px(70),
+                r.Width / 3, r.Bottom - Theme.Px(150),
+                r.Width * 2 / 3, r.Bottom - Theme.Px(10),
+                r.Width + 40, r.Bottom - Theme.Px(90));
+            g.DrawBezier(p2, -40, r.Bottom - Theme.Px(30),
+                r.Width / 3, r.Bottom - Theme.Px(110),
+                r.Width * 2 / 3, r.Bottom + Theme.Px(30),
+                r.Width + 40, r.Bottom - Theme.Px(50));
+        }
+    }
+}
+
+// ---------------------------------------------------------------
+// 组件页（图标行 + 悬停反馈）
+// ---------------------------------------------------------------
+class ComponentRow : Control
+{
+    public string Glyph, Title, Desc;
+    public StatusPill Pill;
+    double hoverT;
+    System.Windows.Forms.Timer anim;
+
+    public ComponentRow(string glyph, string title, string desc, StatusPill pill)
+    {
+        Glyph = glyph;
+        Title = title;
+        Desc = desc;
+        Pill = pill;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+            | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw
+            | ControlStyles.SupportsTransparentBackColor, true);
+        Height = Theme.Px(72);
+        BackColor = Color.Transparent;
+        anim = new System.Windows.Forms.Timer();
+        anim.Interval = 16;
+        anim.Tick += delegate
+        {
+            double t = _hover ? 1 : 0;
+            hoverT += (t - hoverT) * 0.3;
+            Invalidate();
+            if (Math.Abs(hoverT - t) < 0.004) anim.Stop();
+        };
+        Pill.Location = new Point(Width - Pill.Width - Theme.Px(14), (Height - Pill.Height) / 2);
+        Pill.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        Controls.Add(Pill);
+    }
+
+    bool _hover;
+    protected override void OnMouseEnter(EventArgs e) { _hover = true; anim.Start(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { _hover = false; anim.Start(); base.OnMouseLeave(e); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        Color bg = Theme.Lerp(Theme.Panel, Theme.NavHover, hoverT);
+        Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
+        using (GraphicsPath path = Theme.RoundRect(r, Theme.Px(12)))
+        {
+            using (SolidBrush br = new SolidBrush(bg)) g.FillPath(br, path);
+            using (Pen pen = new Pen(Theme.Lerp(Theme.PanelBorder, Theme.Aqua, hoverT * 0.5), 1f))
+                g.DrawPath(pen, path);
+        }
+        using (Font f = new Font(Theme.FontIcons, 15))
+        using (SolidBrush br = new SolidBrush(Theme.Lerp(Theme.Aqua, Color.White, hoverT * 0.4)))
+        {
+            g.DrawString(Glyph, f, br, Theme.Px(18), Height / 2 - Theme.Px(15));
+        }
+        using (SolidBrush br = new SolidBrush(Theme.Ink))
+        {
+            g.DrawString(Title, Theme.FontTitle, br, Theme.Px(58), Theme.Px(12));
+        }
+        using (SolidBrush br = new SolidBrush(Theme.Muted))
+        {
+            g.DrawString(Desc, Theme.FontSmall, br, Theme.Px(58), Theme.Px(38));
+        }
+    }
+}
+
+class ComponentsPage : Page
+{
+    public ComponentsPage(MainForm owner) : base("components")
+    {
+        int x0 = Theme.Px(32);
+        Label t = new Label();
+        t.Text = "组件";
+        t.Font = Theme.FontTitle;
+        t.ForeColor = Theme.Aqua;
+        t.AutoSize = true;
+        t.BackColor = Color.Transparent;
+        t.Location = new Point(x0, Theme.Px(24));
+        Controls.Add(t);
+
+        string[][] rows = {
+            new string[] { "\uECE4", "NewAPI 网关", "密钥托管与模型转发（可选）" },
+            new string[] { "\uEA18", "LLM 守卫", "输出长度前置检查 · ACT 情绪分段" },
+            new string[] { "\uE720", "语音服务", "GPT-SoVITS 推理引擎" },
+            new string[] { "\uECAB", "语音适配器", "OpenAI 协议翻译 · 情绪选音 · 预合成缓存" },
+            new string[] { "\uE8BD", "AIRI", "桌面宠物本体" },
+        };
+        for (int i = 0; i < rows.Length; i++)
+        {
+            StatusPill pill = new StatusPill(rows[i][1].Split(' ')[0]);
+            pill.Tag = i;
+            owner.AllPills.Add(pill);
+            ComponentRow row = new ComponentRow(rows[i][0], rows[i][1], rows[i][2], pill);
+            row.Top = t.Bottom + Theme.Px(12) + i * (Theme.Px(80));
+            row.Left = x0;
+            row.Width = owner.ContentW - x0 - Theme.Px(20);
+            row.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            Controls.Add(row);
+        }
+
+        Label hint = new Label();
+        hint.Text = "状态灯每 2 秒自动刷新；组件页仅作总览，启停与配置请分别使用主页与配置页。";
+        hint.Font = Theme.FontSmall;
+        hint.ForeColor = Theme.Dim;
+        hint.AutoSize = true;
+        hint.BackColor = Color.Transparent;
+        hint.Top = t.Bottom + Theme.Px(20) + 5 * Theme.Px(80);
+        hint.Left = x0;
+        Controls.Add(hint);
+    }
+}
+
+// ---------------------------------------------------------------
+// 启动画面（芒形态，沿用既有引擎）
 // ---------------------------------------------------------------
 
 class CharLabel : Label
@@ -625,97 +934,58 @@ class SplashForm : Form
 }
 
 // ---------------------------------------------------------------
-// 教程窗口（夜海主题）
-// ---------------------------------------------------------------
-
-class TutorialForm : Form
-{
-    public TutorialForm()
-    {
-        Text = "使用教程";
-        Width = 820;
-        Height = 600;
-        StartPosition = FormStartPosition.CenterParent;
-        BackColor = Theme.BgBottom;
-        Font = Theme.FontBody;
-
-        ListBox nav = new ListBox();
-        nav.Dock = DockStyle.Left;
-        nav.Width = 210;
-        nav.Font = new Font("Microsoft YaHei UI", 10F);
-        nav.BorderStyle = BorderStyle.None;
-        nav.BackColor = Theme.Panel;
-        nav.ForeColor = Theme.Ink;
-        foreach (string t in TutorialText.Titles) nav.Items.Add(t);
-
-        RichTextBox body = new RichTextBox();
-        body.Dock = DockStyle.Fill;
-        body.ReadOnly = true;
-        body.BackColor = Theme.BgBottom;
-        body.ForeColor = Theme.Ink;
-        body.BorderStyle = BorderStyle.None;
-        body.DetectUrls = false;
-        try
-        {
-            body.Rtf = MiniMd.ToRtf(TutorialText.FullMarkdown);
-        }
-        catch
-        {
-            body.Text = TutorialText.FullMarkdown;
-        }
-
-        nav.SelectedIndexChanged += delegate
-        {
-            if (nav.SelectedIndex < 0) return;
-            int idx = body.Find(TutorialText.Titles[nav.SelectedIndex]);
-            if (idx >= 0)
-            {
-                body.SelectionStart = idx;
-                body.ScrollToCaret();
-            }
-        };
-
-        Controls.Add(body);
-        Controls.Add(nav);
-    }
-}
-
-// ---------------------------------------------------------------
-// 主界面（荒形态 · 深海军蓝）
+// 主界面（导航栏 + 五页面）
 // ---------------------------------------------------------------
 
 class MainForm : Form
 {
+    // 配置字段（配置页）
     TextBox txtAiri, txtTtsBat, txtNewApiExe, txtNewApiDir, txtNewApiProbe,
             txtSoVitsProbe, txtAdapterProbe, txtSession;
     Label markAiri, markTts, markNewApi, markNewApiDir, markNewApiProbe, markSoVits, markAdapter;
     CheckBox chkAutoExit, chkKeep;
-    CapsuleButton btnStart, btnStop;
-    StatusPill pillNewApi, pillGuard, pillSoVits, pillAdapter, pillAiri;
     TextBox txtLog;
+
+    // 结构
+    Panel navRail, contentPanel;
+    Dictionary<string, NavItem> navItems = new Dictionary<string, NavItem>();
+    Dictionary<string, Page> pages = new Dictionary<string, Page>();
+    string[] navOrder = { "home", "components", "settings", "guide", "logs" };
+    Page currentPage;
+    System.Windows.Forms.Timer slideTimer;
+    int slideDir;
+    Page slidePage;
+
+    internal StatusPill[] Pills = new StatusPill[5];
+    internal List<StatusPill> AllPills = new List<StatusPill>();
+    internal int ContentW { get { return contentPanel != null ? contentPanel.Width : Theme.Px(760); } }
+
+    internal void SnapNavForShot()
+    {
+        foreach (NavItem n in navItems.Values) n.Snap();
+    }
+
+    Thread runThread;
+    HomePage home;
     System.Windows.Forms.Timer statusTimer;
     System.Windows.Forms.Timer validateTimer;
     ToolTip toolTip = new ToolTip();
     volatile bool probing;
 
-    Thread runThread;
-    internal List<CardPanel> entranceCards = new List<CardPanel>();
-    System.Windows.Forms.Timer entranceTimer;
-    int entranceTick;
-
     public MainForm()
     {
-        AutoScaleMode = AutoScaleMode.Dpi;   // PerMonitorV2 下按系统 DPI 整体缩放窗体与控件
-        Text = "furina · 枫丹夜海";
-        Width = 940;
-        Height = 760;
+        Text = "furina";
+        Width = Theme.Px(1120);
+        Height = Theme.Px(720);
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(860, 660);
+        MinimumSize = new Size(Theme.Px(960), Theme.Px(640));
         Font = Theme.FontBody;
         DoubleBuffered = true;
 
-        BuildLayout();
+        BuildNav();
+        BuildPages();
         ApplyDpiScale();
+        Navigate("home", true, true);
 
         validateTimer = new System.Windows.Forms.Timer();
         validateTimer.Interval = 400;
@@ -739,129 +1009,127 @@ class MainForm : Form
         }
         else
         {
-            AppendLog("配置已载入。浏览选择你的组件路径后点「启动」。");
+            AppendLog("配置已载入。浏览选择你的组件路径后，回主页点「启动」。");
         }
 
-        Shown += delegate
-        {
-            PlayEntrance();
-            // 清掉首个输入框获得焦点时的全选高亮
-            Ui(delegate
-            {
-                foreach (TextBox tb in new TextBox[] { txtAiri, txtTtsBat })
-                {
-                    tb.SelectionStart = tb.Text.Length;
-                    tb.SelectionLength = 0;
-                }
-            });
-        };
+        Shown += delegate { PlayEntrance(); };
     }
 
-    // 窗体与最小尺寸按 DPI 系数放大；内部固定像素统一走 Theme.Px
     void ApplyDpiScale()
     {
         try
         {
-            ClientSize = new Size(Theme.Px(940 - 16), Theme.Px(760 - 40));
-            MinimumSize = new Size(Theme.Px(860), Theme.Px(660));
+            ClientSize = new Size(Theme.Px(1104), Theme.Px(680));
+            MinimumSize = new Size(Theme.Px(960), Theme.Px(640));
         }
         catch { }
     }
 
-    protected override void OnPaintBackground(PaintEventArgs e)
-    {
-        using (LinearGradientBrush br = new LinearGradientBrush(
-            ClientRectangle, Theme.BgTop, Theme.BgBottom, LinearGradientMode.Vertical))
-        {
-            e.Graphics.FillRectangle(br, ClientRectangle);
-        }
-    }
-
     // ---------------------------------------------------------------
-    // 布局
+    // 导航栏
     // ---------------------------------------------------------------
 
-    void BuildLayout()
+    void BuildNav()
     {
-        // 顶部品牌条
-        Panel header = new Panel();
-        header.Dock = DockStyle.Top;
-        header.Height = Theme.Px(56);
-        header.BackColor = Color.Transparent;
+        navRail = new Panel();
+        navRail.Dock = DockStyle.Left;
+        navRail.Width = Theme.Px(180);
+        navRail.BackColor = Theme.NavBg;
+        // 注意：navRail 在 BuildNav 末尾才 Add（后 Add 的先停靠到左侧）
+
         Label brand = new Label();
         brand.Text = "furina";
         brand.Font = Theme.FontBrand;
         brand.ForeColor = Theme.Aqua;
         brand.AutoSize = true;
         brand.BackColor = Color.Transparent;
-        brand.Location = new Point(Theme.Px(18), Theme.Px(12));
-        Label tagline = new Label();
-        tagline.Text = "桌面上的她 · 一键拉起的全部世界";
-        tagline.Font = Theme.FontSmall;
-        tagline.ForeColor = Theme.Muted;
-        tagline.AutoSize = true;
-        tagline.BackColor = Color.Transparent;
-        tagline.Location = new Point(brand.Right + Theme.Px(12), Theme.Px(20));
-        header.Controls.Add(brand);
-        header.Controls.Add(tagline);
-        header.Resize += delegate { tagline.Left = brand.Right + 12; };
-        Controls.Add(header);
+        brand.Location = new Point(Theme.Px(18), Theme.Px(20));
+        navRail.Controls.Add(brand);
 
-        // 主体区：单列 TableLayout（卡片 Dock=Fill 占满宽度；日志行吃掉剩余高度）
-        TableLayoutPanel body = new TableLayoutPanel();
-        body.Dock = DockStyle.Fill;
-        body.ColumnCount = 1;
-        body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        body.RowCount = 4;
-        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        body.BackColor = Color.Transparent;
-        body.Padding = new Padding(Theme.Px(16), Theme.Px(6), Theme.Px(16), Theme.Px(10));
+        string[][] items = {
+            new string[] { "\uE80F", "主页", "home" },
+            new string[] { "\uE71D", "组件", "components" },
+            new string[] { "\uE713", "配置", "settings" },
+            new string[] { "\uE8A5", "教程", "guide" },
+            new string[] { "\uE8BA", "日志", "logs" },
+        };
+        for (int i = 0; i < items.Length; i++)
+        {
+            NavItem nav = new NavItem(items[i][0], items[i][1], items[i][2]);
+            nav.Top = brand.Bottom + Theme.Px(24) + i * Theme.Px(50);
+            nav.Left = 0;
+            nav.Width = navRail.Width;
+            nav.Click += Nav_Click;
+            navRail.Controls.Add(nav);
+            navItems[items[i][2]] = nav;
+        }
 
-        CardPanel cardPaths = BuildPathsCard();
-        CardPanel cardBehavior = BuildBehaviorCard();
-        CardPanel cardRun = BuildRunCard();
-        CardPanel cardLog = BuildLogCard();
+        // 底部副标题
+        Label sub = new Label();
+        sub.Text = "枫丹夜海";
+        sub.Font = Theme.FontSmall;
+        sub.ForeColor = Theme.Dim;
+        sub.AutoSize = true;
+        sub.BackColor = Color.Transparent;
+        sub.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+        sub.Location = new Point(Theme.Px(18), Height - Theme.Px(70));
+        navRail.Controls.Add(sub);
+        navRail.Resize += delegate { sub.Top = navRail.Height - Theme.Px(40); };
 
-        cardPaths.Dock = DockStyle.Fill; cardPaths.AutoSize = true;
-        cardBehavior.Dock = DockStyle.Fill; cardBehavior.AutoSize = true;
-        cardRun.Dock = DockStyle.Fill; cardRun.AutoSize = true;
-        cardLog.Dock = DockStyle.Fill;
-
-        body.Controls.Add(cardPaths, 0, 0);
-        body.Controls.Add(cardBehavior, 0, 1);
-        body.Controls.Add(cardRun, 0, 2);
-        body.Controls.Add(cardLog, 0, 3);
-        // 停靠顺序：先 Add body（Fill），后 Add header（Top 先行停靠到顶部）
-        Controls.Add(body);
-        Controls.Add(header);
-
-        entranceCards.Add(cardPaths);
-        entranceCards.Add(cardBehavior);
-        entranceCards.Add(cardRun);
-        entranceCards.Add(cardLog);
+        contentPanel = new Panel();
+        contentPanel.Dock = DockStyle.Fill;
+        contentPanel.BackColor = Color.Transparent;
+        // 先 Add contentPanel（Fill 填满剩余区域），后 Add navRail（Left 先行停靠左侧）
+        Controls.Add(contentPanel);
+        Controls.Add(navRail);
     }
 
-    Label CardTitle(string text)
+    void Nav_Click(object sender, EventArgs e)
     {
-        Label l = new Label();
-        l.Text = text;
-        l.Font = Theme.FontTitle;
-        l.ForeColor = Theme.Aqua;
-        l.AutoSize = true;
-        l.BackColor = Color.Transparent;
-        l.Margin = new Padding(0, 2, 0, 8);
-        return l;
+        NavItem nav = (NavItem)sender;
+        Navigate(nav.Key);
     }
 
-    CardPanel BuildPathsCard()
+    // ---------------------------------------------------------------
+    // 五页面
+    // ---------------------------------------------------------------
+
+    void BuildPages()
     {
+        home = new HomePage(this);
+        pages["home"] = home;
+        pages["components"] = new ComponentsPage(this);
+        pages["settings"] = BuildSettingsPage();
+        pages["guide"] = BuildGuidePage();
+        pages["logs"] = BuildLogsPage();
+
+        foreach (Page p in pages.Values)
+        {
+            p.Visible = false;
+            p.Size = contentPanel.Size;
+            p.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
+            contentPanel.Controls.Add(p);
+        }
+    }
+
+    Page BuildSettingsPage()
+    {
+        Page page = new Page("settings");
+        int x0 = Theme.Px(28);
+        Label t = new Label();
+        t.Text = "配置";
+        t.Font = Theme.FontTitle;
+        t.ForeColor = Theme.Aqua;
+        t.AutoSize = true;
+        t.BackColor = Color.Transparent;
+        t.Location = new Point(x0, Theme.Px(22));
+        page.Controls.Add(t);
+
         CardPanel card = new CardPanel();
-        card.Dock = DockStyle.Top;
+        card.Top = t.Bottom + Theme.Px(8);
+        card.Left = x0;
         card.AutoSize = true;
-
+        card.Width = ContentW - x0 - Theme.Px(24);
         FlowLayoutPanel col = new FlowLayoutPanel();
         col.Dock = DockStyle.Top;
         col.AutoSize = true;
@@ -874,13 +1142,13 @@ class MainForm : Form
         grid.Dock = DockStyle.Top;
         grid.AutoSize = true;
         grid.ColumnCount = 4;
-        // 全部百分比列：随 DPI 缩放与窗口宽度同比例伸缩（固定像素列在 250% DPI 下
-        // 会把中文标签挤换行、行高膨胀到 161px/行——实测踩过）
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 22));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 12));
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 4));
         grid.BackColor = Color.Transparent;
+        grid.Margin = new Padding(0);
+        grid.Width = card.Width - Theme.Px(28);
 
         int row = 0;
         txtAiri = AddRow(grid, row, "AIRI 程序", delegate
@@ -916,31 +1184,22 @@ class MainForm : Form
         Label markSession;
         txtSession = AddRow(grid, row, "网关密钥（空=自动生成）", null, out markSession);
         row++;
-
         col.Controls.Add(grid);
         card.Controls.Add(col);
-        return card;
-    }
+        page.Controls.Add(card);
 
-    CardPanel BuildBehaviorCard()
-    {
-        CardPanel card = new CardPanel();
-        card.Dock = DockStyle.Top;
-        card.AutoSize = true;
-        FlowLayoutPanel col = new FlowLayoutPanel();
-        col.Dock = DockStyle.Top;
-        col.AutoSize = true;
-        col.FlowDirection = FlowDirection.TopDown;
-        col.WrapContents = false;
-        col.BackColor = Color.Transparent;
-        col.Controls.Add(CardTitle("行为"));
-
-        FlowLayoutPanel flow = new FlowLayoutPanel();
-        flow.Dock = DockStyle.Top;
-        flow.AutoSize = true;
-        flow.WrapContents = false;
-        flow.BackColor = Color.Transparent;
-
+        CardPanel card2 = new CardPanel();
+        card2.Top = card.Top + Theme.Px(330);
+        card2.Left = x0;
+        card2.AutoSize = true;
+        card2.Width = card.Width;
+        FlowLayoutPanel col2 = new FlowLayoutPanel();
+        col2.Dock = DockStyle.Top;
+        col2.AutoSize = true;
+        col2.FlowDirection = FlowDirection.TopDown;
+        col2.WrapContents = false;
+        col2.BackColor = Color.Transparent;
+        col2.Controls.Add(CardTitle("行为"));
         chkAutoExit = DarkCheck("AIRI 关闭时自动退出并回收");
         chkKeep = DarkCheck("退出时保留服务运行");
         chkAutoExit.CheckedChanged += delegate
@@ -951,12 +1210,333 @@ class MainForm : Form
         {
             if (chkKeep.Checked && chkAutoExit.Checked) chkAutoExit.Checked = false;
         };
+        FlowLayoutPanel ck = new FlowLayoutPanel();
+        ck.Dock = DockStyle.Top;
+        ck.AutoSize = true;
+        ck.WrapContents = false;
+        ck.BackColor = Color.Transparent;
+        ck.Controls.Add(chkAutoExit);
+        ck.Controls.Add(chkKeep);
+        col2.Controls.Add(ck);
 
-        flow.Controls.Add(chkAutoExit);
-        flow.Controls.Add(chkKeep);
-        col.Controls.Add(flow);
-        card.Controls.Add(col);
-        return card;
+        CapsuleButton btnSave = new CapsuleButton();
+        btnSave.Text = "保存配置";
+        btnSave.Size = new Size(Theme.Px(120), Theme.Px(32));
+        btnSave.Margin = new Padding(0, Theme.Px(8), 0, 0);
+        btnSave.Click += delegate { FieldsToCfg(); Furina.SaveIni(); Furina.Log("配置已保存到 furina.ini"); };
+        col2.Controls.Add(btnSave);
+        card2.Controls.Add(col2);
+        page.Controls.Add(card2);
+
+        // 页面尺寸确定后统一校正卡片宽度与第二卡片位置（窗口缩放时同步）
+        page.Layout += delegate
+        {
+            int cw = page.ClientSize.Width - x0 - Theme.Px(24);
+            if (cw < Theme.Px(400)) cw = Theme.Px(400);
+            card.Width = cw;
+            card2.Width = cw;
+            grid.Width = cw - Theme.Px(28);
+            card2.Top = card.Bottom + Theme.Px(10);
+        };
+        return page;
+    }
+
+    Page BuildGuidePage()
+    {
+        Page page = new Page("guide");
+        int x0 = Theme.Px(28);
+        Label t = new Label();
+        t.Text = "教程";
+        t.Font = Theme.FontTitle;
+        t.ForeColor = Theme.Aqua;
+        t.AutoSize = true;
+        t.BackColor = Color.Transparent;
+        t.Location = new Point(x0, Theme.Px(22));
+        page.Controls.Add(t);
+
+        FlowLayoutPanel navBtns = new FlowLayoutPanel();
+        navBtns.AutoSize = true;
+        navBtns.WrapContents = true;
+        navBtns.BackColor = Color.Transparent;
+        navBtns.Location = new Point(x0, t.Bottom + Theme.Px(8));
+        navBtns.Width = ContentW - x0 - Theme.Px(24);
+        navBtns.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+
+        RichTextBox body = new RichTextBox();
+        body.Dock = DockStyle.Fill;
+        body.ReadOnly = true;
+        body.BackColor = Theme.FieldBg;
+        body.ForeColor = Theme.Ink;
+        body.BorderStyle = BorderStyle.None;
+        body.DetectUrls = false;
+        try { body.Rtf = MiniMd.ToRtf(TutorialText.FullMarkdown); }
+        catch { body.Text = TutorialText.FullMarkdown; }
+
+        for (int i = 0; i < TutorialText.Titles.Length; i++)
+        {
+            CapsuleButton b = new CapsuleButton();
+            b.Text = TutorialText.Titles[i].Replace(" · ", "·");
+            b.AutoSize = true;
+            b.MinimumSize = new Size(Theme.Px(110), Theme.Px(28));
+            int idx = i;
+            b.Click += delegate
+            {
+                int p = body.Find(TutorialText.Titles[idx]);
+                if (p >= 0) { body.SelectionStart = p; body.ScrollToCaret(); }
+            };
+            navBtns.Controls.Add(b);
+        }
+        page.Controls.Add(navBtns);
+
+        Panel host = new Panel();
+        host.BackColor = Color.Transparent;
+        host.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        host.Controls.Add(body);
+        page.Controls.Add(host);
+
+        page.Layout += delegate
+        {
+            navBtns.Width = page.ClientSize.Width - x0 - Theme.Px(24);
+            host.SetBounds(x0, navBtns.Bottom + Theme.Px(8),
+                page.ClientSize.Width - x0 - Theme.Px(24),
+                page.ClientSize.Height - navBtns.Bottom - Theme.Px(24));
+        };
+        host.SetBounds(x0, navBtns.Bottom + Theme.Px(8),
+            ContentW - x0 - Theme.Px(24), contentPanel.Height - navBtns.Bottom - Theme.Px(24));
+        return page;
+    }
+
+    Page BuildLogsPage()
+    {
+        Page page = new Page("logs");
+        int x0 = Theme.Px(28);
+        Label t = new Label();
+        t.Text = "日志";
+        t.Font = Theme.FontTitle;
+        t.ForeColor = Theme.Aqua;
+        t.AutoSize = true;
+        t.BackColor = Color.Transparent;
+        t.Location = new Point(x0, Theme.Px(22));
+        page.Controls.Add(t);
+
+        txtLog = new TextBox();
+        txtLog.Multiline = true;
+        txtLog.ReadOnly = true;
+        txtLog.ScrollBars = ScrollBars.Vertical;
+        txtLog.BackColor = Theme.FieldBg;
+        txtLog.ForeColor = Color.FromArgb(180, 220, 235);
+        txtLog.Font = Theme.FontLog;
+        txtLog.BorderStyle = BorderStyle.None;
+        txtLog.Dock = DockStyle.Fill;
+
+        Panel host = new Panel();
+        host.BackColor = Color.Transparent;
+        host.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+        host.Controls.Add(txtLog);
+        page.Controls.Add(host);
+
+        page.Layout += delegate
+        {
+            host.SetBounds(x0, t.Bottom + Theme.Px(8),
+                page.ClientSize.Width - x0 - Theme.Px(24),
+                page.ClientSize.Height - t.Bottom - Theme.Px(24));
+        };
+        host.SetBounds(x0, t.Bottom + Theme.Px(8),
+            ContentW - x0 - Theme.Px(24), contentPanel.Height - t.Bottom - Theme.Px(24));
+        return page;
+    }
+
+    // ---------------------------------------------------------------
+    // 页面切换（右滑进入，指数缓出）
+    // ---------------------------------------------------------------
+
+    internal void Navigate(string key) { Navigate(key, false, false); }
+    internal void NavigateInstant(string key) { Navigate(key, true, true); }
+
+    void Navigate(string key, bool silent, bool instant)
+    {
+        if (!pages.ContainsKey(key)) return;
+        Page target = pages[key];
+        if (currentPage == target && !instant) return;
+
+        foreach (NavItem n in navItems.Values) n.SetSelected(n.Key == key);
+
+        if (instant || currentPage == null)
+        {
+            target.Visible = true;
+            target.BringToFront();
+            target.Left = 0;
+            if (currentPage != null && currentPage != target) currentPage.Visible = false;
+            currentPage = target;
+            return;
+        }
+
+        int dir = Array.IndexOf(navOrder, key) > Array.IndexOf(navOrder, currentPage.Key) ? 1 : -1;
+        slideDir = dir;
+        slidePage = target;
+        target.Visible = true;
+        target.Left = dir * contentPanel.Width;
+        target.BringToFront();
+        target.SetBounds(target.Left, 0, contentPanel.Width, contentPanel.Height);
+
+        if (slideTimer != null) slideTimer.Stop();
+        slideTimer = new System.Windows.Forms.Timer();
+        slideTimer.Interval = 16;
+        double start = Environment.TickCount / 1000.0;
+        int fromX = target.Left;
+        Page old = currentPage;
+        int oldFromX = old.Left;
+        slideTimer.Tick += delegate
+        {
+            double p = Math.Min(1.0, (Environment.TickCount / 1000.0 - start) / 0.28);
+            double e = Theme.EaseOut(p);
+            slidePage.Left = fromX - (int)Math.Round(dir * contentPanel.Width * e);
+            old.Left = oldFromX - (int)Math.Round(dir * contentPanel.Width * 0.3 * e);
+            if (p >= 1)
+            {
+                slideTimer.Stop();
+                old.Visible = false;
+                old.Left = 0;
+                slidePage.Left = 0;
+                currentPage = slidePage;
+            }
+        };
+        slideTimer.Start();
+    }
+
+    // ---------------------------------------------------------------
+    // 启动/停止
+    // ---------------------------------------------------------------
+
+    internal void ToggleRun()
+    {
+        if (runThread != null && runThread.IsAlive)
+        {
+            Furina.RequestStop();
+        }
+        else
+        {
+            StartRun();
+        }
+    }
+
+    void StartRun()
+    {
+        FieldsToCfg();
+        Furina.SaveIni();
+        Furina.ResetState();
+        Thread t = new Thread(Program.CoreRunWorker);
+        t.IsBackground = true;
+        t.Start();
+        AttachRun(t);
+    }
+
+    void AttachRun(Thread t)
+    {
+        runThread = t;
+        SetMainButton(true);
+        Thread watcher = new Thread(delegate ()
+        {
+            t.Join();
+            Ui(delegate
+            {
+                SetMainButton(false);
+                AppendLog("已停止。可以修改配置后重新启动。");
+            });
+        });
+        watcher.IsBackground = true;
+        watcher.Start();
+    }
+
+    void SetMainButton(bool running)
+    {
+        if (home == null) return;
+        if (running)
+        {
+            home.BtnMain.Text = "■ 停止全部组件";
+            home.BtnMain.AccentColor = Theme.Err;
+        }
+        else
+        {
+            home.BtnMain.Text = "▶ 启动全部组件";
+            home.BtnMain.AccentColor = Color.Empty;
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 状态灯
+    // ---------------------------------------------------------------
+
+    void RefreshStatusAsync()
+    {
+        if (probing) return;
+        probing = true;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            try
+            {
+                Furina.ComponentState stNewApi, stSoVits, stAdapter, stGuard;
+                if (Furina.NewApiEnabled)
+                {
+                    stNewApi = Furina.ProbeComponent(Furina.cfg.NewApiProbe);
+                    stGuard = Furina.cfg.LlmGuardEnabled
+                        ? Furina.ProbeComponent("http://127.0.0.1:" + Furina.cfg.LlmGuardPort + "/health")
+                        : Furina.ComponentState.Dead;
+                }
+                else
+                {
+                    stNewApi = Furina.ComponentState.Dead;
+                    stGuard = Furina.ComponentState.Dead;
+                }
+                stSoVits = Furina.ProbeComponent(Furina.cfg.SoVitsProbe);
+                stAdapter = Furina.ProbeComponent(Furina.cfg.AdapterProbe);
+                bool airi = Process.GetProcessesByName("airi").Length > 0;
+
+                Ui(delegate
+                {
+                    SetPill(0, Furina.NewApiEnabled, stNewApi);
+                    SetPill(1, Furina.NewApiEnabled && Furina.cfg.LlmGuardEnabled, stGuard);
+                    SetPill(2, true, stSoVits);
+                    SetPill(3, true, stAdapter);
+                    SetPillState(4, airi ? "运行中" : "未运行", airi ? Theme.Ok : Theme.Err);
+                });
+            }
+            finally
+            {
+                probing = false;
+            }
+        });
+    }
+
+    void SetPill(int i, bool enabled, Furina.ComponentState st)
+    {
+        if (!enabled) { SetPillState(i, "未启用", Theme.Dim); return; }
+        bool ok = st == Furina.ComponentState.Alive || st == Furina.ComponentState.Busy;
+        SetPillState(i, ok ? "运行中" : "未响应", ok ? Theme.Ok : Theme.Err);
+    }
+
+    void SetPillState(int i, string text, Color c)
+    {
+        foreach (StatusPill p in AllPills)
+        {
+            if (p.Tag is int && (int)p.Tag == i) p.SetState(text, c);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 配置字段辅助
+    // ---------------------------------------------------------------
+
+    Label CardTitle(string text)
+    {
+        Label l = new Label();
+        l.Text = text;
+        l.Font = Theme.FontTitle;
+        l.ForeColor = Theme.Aqua;
+        l.AutoSize = true;
+        l.BackColor = Color.Transparent;
+        l.Margin = new Padding(0, 2, 0, Theme.Px(8));
+        return l;
     }
 
     CheckBox DarkCheck(string text)
@@ -968,133 +1548,9 @@ class MainForm : Form
         c.ForeColor = Theme.Ink;
         c.BackColor = Color.Transparent;
         c.FlatStyle = FlatStyle.Flat;
-        c.FlatAppearance.CheckedBackColor = Theme.Panel;
-        c.Margin = new Padding(0, 2, 20, 2);
+        c.Margin = new Padding(0, 2, Theme.Px(20), 2);
         return c;
     }
-
-    CardPanel BuildRunCard()
-    {
-        CardPanel card = new CardPanel();
-        card.Dock = DockStyle.Top;
-        card.AutoSize = true;
-        FlowLayoutPanel col = new FlowLayoutPanel();
-        col.Dock = DockStyle.Top;
-        col.AutoSize = true;
-        col.FlowDirection = FlowDirection.TopDown;
-        col.WrapContents = false;
-        col.BackColor = Color.Transparent;
-        col.Controls.Add(CardTitle("运行"));
-
-        FlowLayoutPanel btnFlow = new FlowLayoutPanel();
-        btnFlow.Dock = DockStyle.Top;
-        btnFlow.AutoSize = true;
-        btnFlow.WrapContents = false;
-        btnFlow.BackColor = Color.Transparent;
-
-        CapsuleButton btnSave = new CapsuleButton();
-        btnSave.Text = "保存配置";
-        btnSave.Size = new Size(Theme.Px(104), Theme.Px(30));
-        btnSave.Click += delegate { FieldsToCfg(); Furina.SaveIni(); Furina.Log("配置已保存到 furina.ini"); };
-        btnStart = new CapsuleButton();
-        btnStart.Text = "▶ 启动";
-        btnStart.Size = new Size(Theme.Px(104), Theme.Px(30));
-        btnStart.AccentColor = Theme.Ok;
-        btnStart.Click += delegate { StartRun(); };
-        btnStop = new CapsuleButton();
-        btnStop.Text = "■ 停止";
-        btnStop.Size = new Size(Theme.Px(96), Theme.Px(30));
-        btnStop.AccentColor = Theme.Err;
-        btnStop.Enabled = false;
-        btnStop.Click += delegate { Furina.RequestStop(); };
-        CapsuleButton btnTutorial = new CapsuleButton();
-        btnTutorial.Text = "教程";
-        btnTutorial.Size = new Size(Theme.Px(88), Theme.Px(30));
-        btnTutorial.AccentColor = Theme.Gold;
-        btnTutorial.Click += delegate { new TutorialForm().Show(this); };
-
-        btnFlow.Controls.Add(btnSave);
-        btnFlow.Controls.Add(btnStart);
-        btnFlow.Controls.Add(btnStop);
-        btnFlow.Controls.Add(btnTutorial);
-
-        FlowLayoutPanel pillFlow = new FlowLayoutPanel();
-        pillFlow.Dock = DockStyle.Top;
-        pillFlow.AutoSize = true;
-        pillFlow.WrapContents = true;
-        pillFlow.BackColor = Color.Transparent;
-        pillFlow.Margin = new Padding(0, 8, 0, 0);
-
-        pillNewApi = new StatusPill("NewAPI");
-        pillGuard = new StatusPill("LLM守卫");
-        pillSoVits = new StatusPill("语音服务");
-        pillAdapter = new StatusPill("语音适配器");
-        pillAiri = new StatusPill("AIRI");
-        pillFlow.Controls.Add(pillNewApi);
-        pillFlow.Controls.Add(pillGuard);
-        pillFlow.Controls.Add(pillSoVits);
-        pillFlow.Controls.Add(pillAdapter);
-        pillFlow.Controls.Add(pillAiri);
-
-        col.Controls.Add(btnFlow);
-        col.Controls.Add(pillFlow);
-        card.Controls.Add(col);
-        return card;
-    }
-
-    CardPanel BuildLogCard()
-    {
-        CardPanel card = new CardPanel();
-        card.Dock = DockStyle.Top;
-        card.AutoSize = true;
-        FlowLayoutPanel col = new FlowLayoutPanel();
-        col.Dock = DockStyle.Top;
-        col.AutoSize = true;
-        col.FlowDirection = FlowDirection.TopDown;
-        col.WrapContents = false;
-        col.BackColor = Color.Transparent;
-        col.Controls.Add(CardTitle("日志"));
-
-        txtLog = new TextBox();
-        txtLog.Multiline = true;
-        txtLog.ReadOnly = true;
-        txtLog.ScrollBars = ScrollBars.Vertical;
-        txtLog.BackColor = Theme.FieldBg;
-        txtLog.ForeColor = Color.FromArgb(180, 220, 235);
-        txtLog.Font = Theme.FontLog;
-        txtLog.BorderStyle = BorderStyle.None;
-        txtLog.Dock = DockStyle.Top;
-        txtLog.Height = Theme.Px(170);
-
-        col.Controls.Add(txtLog);
-        card.Controls.Add(col);
-        return card;
-    }
-
-    // ---------------------------------------------------------------
-    // 入场编排：卡片错峰滑入（transform 域，指数缓出）
-    // ---------------------------------------------------------------
-
-    void PlayEntrance()
-    {
-        // 窗体级淡入：opacity 单属性、指数缓出、~250ms。不做布局级动画——
-        // 在 TableLayout 里改 Margin 会每帧触发全量重排，视觉上就是抖动/诡异。
-        Opacity = 0;
-        System.Windows.Forms.Timer t = new System.Windows.Forms.Timer();
-        t.Interval = 16;
-        double start = Environment.TickCount / 1000.0;
-        t.Tick += delegate
-        {
-            double p = Math.Min(1.0, (Environment.TickCount / 1000.0 - start) / 0.25);
-            Opacity = Theme.EaseOut(p);
-            if (p >= 1) t.Stop();
-        };
-        t.Start();
-    }
-
-    // ---------------------------------------------------------------
-    // 行构建与选择器
-    // ---------------------------------------------------------------
 
     TextBox AddRow(TableLayoutPanel grid, int row, string label, EventHandler onBrowse, out Label mark)
     {
@@ -1104,7 +1560,7 @@ class MainForm : Form
         lbl.Text = label;
         lbl.AutoSize = true;
         lbl.Anchor = AnchorStyles.Left;
-        lbl.Padding = new Padding(2, 8, 0, 0);
+        lbl.Padding = new Padding(2, Theme.Px(8), 0, 0);
         lbl.Font = Theme.FontBody;
         lbl.ForeColor = Theme.Muted;
         lbl.BackColor = Color.Transparent;
@@ -1115,7 +1571,7 @@ class MainForm : Form
         fieldWrap.Height = Theme.Px(26);
         fieldWrap.Padding = new Padding(Theme.Px(8), Theme.Px(4), Theme.Px(8), Theme.Px(4));
         fieldWrap.BackColor = Theme.FieldBg;
-        fieldWrap.Margin = new Padding(3, 3, 3, 3);
+        fieldWrap.Margin = new Padding(3);
         TextBox tb = new TextBox();
         tb.Dock = DockStyle.Fill;
         tb.BorderStyle = BorderStyle.None;
@@ -1132,7 +1588,7 @@ class MainForm : Form
             CapsuleButton btn = new CapsuleButton();
             btn.Text = "浏览";
             btn.Dock = DockStyle.Fill;
-            btn.Margin = new Padding(3, 3, 3, 3);
+            btn.Margin = new Padding(3);
             btn.Click += onBrowse;
             grid.Controls.Add(btn, 2, row);
         }
@@ -1165,10 +1621,6 @@ class MainForm : Form
         return null;
     }
 
-    // ---------------------------------------------------------------
-    // 校验（逻辑同旧版，仅配色换成令牌）
-    // ---------------------------------------------------------------
-
     void HookTextChanged()
     {
         foreach (TextBox tb in new TextBox[] {
@@ -1195,7 +1647,7 @@ class MainForm : Form
         else if (!File.Exists(airi)) SetMark(markAiri, false, "文件不存在：" + airi);
         else if (!string.Equals(Path.GetFileName(airi), "airi.exe", StringComparison.OrdinalIgnoreCase))
             SetMark(markAiri, false, "文件存在，但文件名不是 airi.exe，请确认选对了 AIRI 主程序");
-        else SetMark(markAiri, true, "AIRI 主程序（静态校验通过；是否运行中见下方状态灯）");
+        else SetMark(markAiri, true, "AIRI 主程序（静态校验通过；是否运行中见状态灯）");
 
         string tts = txtTtsBat.Text.Trim();
         string[] runExts = { ".bat", ".cmd", ".exe", ".ps1", ".vbs" };
@@ -1246,10 +1698,6 @@ class MainForm : Form
             && (u.Scheme == Uri.UriSchemeHttp || u.Scheme == Uri.UriSchemeHttps);
     }
 
-    // ---------------------------------------------------------------
-    // 配置与运行（逻辑同旧版）
-    // ---------------------------------------------------------------
-
     void FieldsFromCfg()
     {
         Furina.Cfg c = Furina.cfg;
@@ -1280,93 +1728,33 @@ class MainForm : Form
         c.KeepServicesOnExit = chkKeep.Checked;
     }
 
-    void StartRun()
+    // ---------------------------------------------------------------
+    // 入场淡入
+    // ---------------------------------------------------------------
+
+    void PlayEntrance()
     {
-        FieldsToCfg();
-        Furina.SaveIni();
-        Furina.ResetState();
-        Thread t = new Thread(Program.CoreRunWorker);
-        t.IsBackground = true;
+        Opacity = 0;
+        System.Windows.Forms.Timer t = new System.Windows.Forms.Timer();
+        t.Interval = 16;
+        double start = Environment.TickCount / 1000.0;
+        t.Tick += delegate
+        {
+            double p = Math.Min(1.0, (Environment.TickCount / 1000.0 - start) / 0.25);
+            Opacity = Theme.EaseOut(p);
+            if (p >= 1) t.Stop();
+        };
         t.Start();
-        AttachRun(t);
-    }
-
-    void AttachRun(Thread t)
-    {
-        runThread = t;
-        btnStart.Enabled = false;
-        btnStop.Enabled = true;
-        Thread watcher = new Thread(delegate ()
-        {
-            t.Join();
-            Ui(delegate
-            {
-                btnStart.Enabled = true;
-                btnStop.Enabled = false;
-                AppendLog("已停止。可以修改配置后重新启动。");
-            });
-        });
-        watcher.IsBackground = true;
-        watcher.Start();
     }
 
     // ---------------------------------------------------------------
-    // 状态灯
+    // 调试
     // ---------------------------------------------------------------
 
-    void RefreshStatusAsync()
+    internal void DumpControls(Control c, StringBuilder sb, int depth)
     {
-        if (probing) return;
-        probing = true;
-        ThreadPool.QueueUserWorkItem(delegate
-        {
-            try
-            {
-                Furina.ComponentState stNewApi, stSoVits, stAdapter, stGuard;
-                if (Furina.NewApiEnabled)
-                {
-                    stNewApi = Furina.ProbeComponent(Furina.cfg.NewApiProbe);
-                    stGuard = Furina.cfg.LlmGuardEnabled
-                        ? Furina.ProbeComponent("http://127.0.0.1:" + Furina.cfg.LlmGuardPort + "/health")
-                        : Furina.ComponentState.Dead;
-                }
-                else
-                {
-                    stNewApi = Furina.ComponentState.Dead;
-                    stGuard = Furina.ComponentState.Dead;
-                }
-                stSoVits = Furina.ProbeComponent(Furina.cfg.SoVitsProbe);
-                stAdapter = Furina.ProbeComponent(Furina.cfg.AdapterProbe);
-                bool airi = Process.GetProcessesByName("airi").Length > 0;
-
-                Ui(delegate
-                {
-                    if (Furina.NewApiEnabled)
-                        pillNewApi.SetState(PillText(stNewApi), PillColor(stNewApi));
-                    else pillNewApi.SetState("未启用", Theme.Dim);
-                    if (Furina.NewApiEnabled && Furina.cfg.LlmGuardEnabled)
-                        pillGuard.SetState(PillText(stGuard), PillColor(stGuard));
-                    else pillGuard.SetState("未启用", Theme.Dim);
-                    pillSoVits.SetState(PillText(stSoVits), PillColor(stSoVits));
-                    pillAdapter.SetState(PillText(stAdapter), PillColor(stAdapter));
-                    pillAiri.SetState(airi ? "运行中" : "未运行", airi ? Theme.Ok : Theme.Err);
-                });
-            }
-            finally
-            {
-                probing = false;
-            }
-        });
-    }
-
-    static string PillText(Furina.ComponentState st)
-    {
-        return st == Furina.ComponentState.Alive || st == Furina.ComponentState.Busy ? "运行中" : "未响应";
-    }
-
-    static Color PillColor(Furina.ComponentState st)
-    {
-        return st == Furina.ComponentState.Alive || st == Furina.ComponentState.Busy ? Theme.Ok : Theme.Err;
+        sb.AppendLine(new string(' ', depth * 2) + c.GetType().Name + " bounds=" + c.Bounds + " vis=" + c.Visible);
+        foreach (Control ch in c.Controls) DumpControls(ch, sb, depth + 1);
     }
 
     // ---------------------------------------------------------------

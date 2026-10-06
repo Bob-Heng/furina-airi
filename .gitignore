@@ -38,6 +38,7 @@ __pycache__/
 
 # UI 自检截图产物
 launcher/selfshot.png
+launcher/selfshot_*.png
 launcher/selfshot_debug.txt
 
 # 设计参考图（版权素材，不入库）
