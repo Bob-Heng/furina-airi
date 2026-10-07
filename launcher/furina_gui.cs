@@ -61,6 +61,26 @@ class Program
 
         SplashForm splash = new SplashForm();
         splash.Show();
+        if (SelfShot)
+        {
+            Thread scap = new Thread(delegate ()
+            {
+                Thread.Sleep(1400);
+                try
+                {
+                    Rectangle sr = new Rectangle(splash.PointToScreen(Point.Empty), splash.Size);
+                    using (Bitmap bmp = new Bitmap(sr.Width, sr.Height))
+                    using (Graphics g = Graphics.FromImage(bmp))
+                    {
+                        g.CopyFromScreen(sr.Location, Point.Empty, sr.Size);
+                        bmp.Save(Path.Combine(Furina.baseDir, "selfshot_splash.png"));
+                    }
+                }
+                catch { }
+            });
+            scap.IsBackground = true;
+            scap.Start();
+        }
         ManualResetEvent initDone = new ManualResetEvent(false);
         bool[] autoStart = new bool[1];
         new Thread(delegate ()
@@ -140,7 +160,7 @@ class Program
         t.Start();
     }
 
-    // 动画过渡残影验证：动画切页的中段与收尾各截一帧
+    // 动画过渡残影验证：动画切页的中段与收尾各截一帧，再验证二级页推入
     static void RunAnimShot(MainForm f)
     {
         f.NavigateInstant("home");
@@ -151,6 +171,8 @@ class Program
         {
             phase++;
             if (phase == 1) { f.Navigate("components"); return; }
+            if (phase == 4) { f.OpenComponentDetailAnim(0); return; }
+            if (phase >= 6) { t2.Stop(); Application.Exit(); return; }
             try
             {
                 f.Activate();
@@ -160,11 +182,12 @@ class Program
                 using (Graphics g = Graphics.FromImage(bmp))
                 {
                     g.CopyFromScreen(r.Location, Point.Empty, r.Size);
-                    bmp.Save(Path.Combine(Furina.baseDir, phase == 2 ? "selfshot_anim_mid.png" : "selfshot_anim_end.png"));
+                    string name = phase == 2 ? "selfshot_anim_mid.png"
+                        : phase == 3 ? "selfshot_anim_end.png" : "selfshot_anim_detail.png";
+                    bmp.Save(Path.Combine(Furina.baseDir, name));
                 }
             }
             catch { }
-            if (phase >= 3) { t2.Stop(); Application.Exit(); }
         };
         t2.Start();
     }
@@ -1310,6 +1333,7 @@ class ComponentsPage : Page
     internal Page[] details = new Page[5];
     Page activeDetail;
     bool detailOpen;
+    SlideTransition activeTr;
 
     public ComponentsPage(MainForm owner) : base("components")
     {
@@ -1390,9 +1414,31 @@ class ComponentsPage : Page
         if (listHost != null) listHost.Visible = !covered;
     }
 
+    // 有在播的过渡就强制收场：否则新过渡的 fromBmp 会把仍在滑动的旧过渡表面
+    // 一起截进去，形成"叠中叠"（快速连点组件/返回时必现的脏帧根源）
+    internal void ForceFinishTr()
+    {
+        if (activeTr == null) return;
+        Controls.Remove(activeTr);
+        activeTr.Dispose();
+        activeTr = null;
+        if (detailOpen && activeDetail != null)
+        {
+            activeDetail.Left = 0;
+            activeDetail.Visible = true;
+            activeDetail.BringToFront();
+        }
+        else
+        {
+            foreach (Page p in details) if (p != null) p.Visible = false;
+        }
+        SyncUnderlayVisibility();
+    }
+
     // 二级配置页：快照过渡推入（不移动 HWND，无残影）
     internal void OpenDetail(int idx, bool instant)
     {
+        ForceFinishTr();
         Page d = details[idx];
         if (d == null) return;
         if (detailOpen && activeDetail == d) return;
@@ -1422,15 +1468,18 @@ class ComponentsPage : Page
             SyncUnderlayVisibility();
             Controls.Remove(self);
             self.Dispose();
+            if (activeTr == self) activeTr = null;
         });
         tr.Bounds = new Rectangle(0, 0, Width, Height);
         Controls.Add(tr);
         tr.BringToFront();
+        activeTr = tr;
         tr.Begin();
     }
 
     internal void CloseDetail(bool instant)
     {
+        ForceFinishTr();
         if (!detailOpen || activeDetail == null) return;
         Page d = activeDetail;
         detailOpen = false;
@@ -1445,11 +1494,61 @@ class ComponentsPage : Page
         {
             Controls.Remove(self);
             self.Dispose();
+            if (activeTr == self) activeTr = null;
         });
         tr.Bounds = new Rectangle(0, 0, Width, Height);
         Controls.Add(tr);
         tr.BringToFront();
+        activeTr = tr;
         tr.Begin();
+    }
+}
+
+// ---------------------------------------------------------------
+// 启动画面进度：水波滑行胶囊（替换原生 Marquee 的过时外观）
+// ---------------------------------------------------------------
+class GlideProgress : Control
+{
+    double t0 = Environment.TickCount / 1000.0;
+    System.Windows.Forms.Timer timer;
+
+    public GlideProgress()
+    {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+            | ControlStyles.OptimizedDoubleBuffer | ControlStyles.SupportsTransparentBackColor, true);
+        BackColor = Color.Transparent;
+        timer = new System.Windows.Forms.Timer();
+        timer.Interval = 16;
+        timer.Tick += delegate { Invalidate(); };
+        timer.Start();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (Width <= 0 || Height <= 0) return;
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        double t = ((Environment.TickCount / 1000.0 - t0) % 1.5) / 1.5;
+        double ez = 0.5 - 0.5 * Math.Cos(Math.PI * t);
+        using (GraphicsPath track = Theme.RoundRect(new Rectangle(0, 0, Width - 1, Height - 1), Height / 2))
+        {
+            using (SolidBrush br = new SolidBrush(Color.FromArgb(100, 255, 255, 255))) g.FillPath(br, track);
+            using (Pen pen = new Pen(Color.FromArgb(130, 150, 195, 230), 1f)) g.DrawPath(pen, track);
+        }
+        int capW = Width / 3;
+        int x = (int)Math.Round(-capW + (Width + capW) * ez);
+        using (GraphicsPath cap = Theme.RoundRect(new Rectangle(x, 1, capW, Height - 2), (Height - 2) / 2))
+        using (LinearGradientBrush br = new LinearGradientBrush(
+            new Rectangle(x, 0, capW, Height), Theme.Aqua, Theme.AquaDeep, LinearGradientMode.Horizontal))
+        {
+            g.FillPath(br, cap);
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) { timer.Stop(); timer.Dispose(); }
+        base.Dispose(disposing);
     }
 }
 
@@ -1465,7 +1564,7 @@ class CharLabel : Label
         e.Graphics.TextRenderingHint = TextRenderingHint.AntiAlias;
         using (LinearGradientBrush br = new LinearGradientBrush(
             new Rectangle(0, 0, Width, Height),
-            Color.FromArgb(196, 233, 250), Color.FromArgb(30, 100, 190), LinearGradientMode.Vertical))
+            Color.FromArgb(116, 192, 240), Color.FromArgb(18, 90, 176), LinearGradientMode.Vertical))
         using (StringFormat fmt = new StringFormat
         { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
         {
@@ -1478,10 +1577,11 @@ class SplashForm : Form
 {
     const string MSG = "稍等片刻，你的蓝莓小蛋糕正在路上……";
     readonly CharLabel[] chars = new CharLabel[MSG.Length];
-    readonly int baseY = Theme.Px(70);
+    readonly int baseY = Theme.Px(100);
     readonly int fallPx = Theme.Px(80);
     readonly int[] positions = new int[MSG.Length];
     readonly bool[] shown = new bool[MSG.Length];
+    Image silhouette;
 
     volatile bool stopRender;
     Thread renderThread;
@@ -1494,23 +1594,21 @@ class SplashForm : Form
     {
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.CenterScreen;
-        Size = new Size(Theme.Px(560), Theme.Px(240));
+        Size = new Size(Theme.Px(640), Theme.Px(300));
         DoubleBuffered = true;
         try
         {
             Stream ics = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("furina.ico");
             if (ics != null) Icon = new Icon(ics);
+            Stream rs = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("furina-silhouette.png");
+            if (rs != null)
+            {
+                using (rs)
+                using (Bitmap tmp = (Bitmap)Image.FromStream(rs))
+                    silhouette = new Bitmap(tmp);
+            }
         }
         catch { }
-
-        Label caption = new Label();
-        caption.Text = "furina";
-        caption.Font = Theme.FontBrand;
-        caption.ForeColor = Theme.Gold;
-        caption.AutoSize = true;
-        caption.BackColor = Color.Transparent;
-        caption.Location = new Point((Width - caption.PreferredWidth) / 2, Theme.Px(24));
-        Controls.Add(caption);
 
         Font f = PickFont();
         using (Graphics g = CreateGraphics())
@@ -1529,7 +1627,7 @@ class SplashForm : Form
                 chars[i].Text = MSG[i].ToString();
                 chars[i].Font = f;
                 chars[i].BackColor = Color.Transparent;
-                chars[i].Size = new Size(widths[i] + 9, 38);
+                chars[i].Size = new Size(widths[i] + 9, 40);
                 chars[i].Location = new Point(x, baseY - fallPx);
                 chars[i].Visible = false;
                 Controls.Add(chars[i]);
@@ -1537,11 +1635,10 @@ class SplashForm : Form
             }
         }
 
-        ProgressBar bar = new ProgressBar();
-        bar.Style = ProgressBarStyle.Marquee;
-        bar.Size = new Size(Theme.Px(400), Theme.Px(8));
-        bar.Location = new Point((Width - bar.Width) / 2, Theme.Px(170));
-        Controls.Add(bar);
+        GlideProgress glide = new GlideProgress();
+        glide.Size = new Size(Theme.Px(380), Theme.Px(7));
+        glide.Location = new Point((Width - glide.Width) / 2, Theme.Px(196));
+        Controls.Add(glide);
 
         refreshHz = GetRefreshHz();
         cycleStart = Environment.TickCount / 1000.0;
@@ -1553,16 +1650,62 @@ class SplashForm : Form
 
     static Font PickFont()
     {
-        return new Font(Theme.UiFontName, 18);
+        return new Font(Theme.UiFontName, 17);
     }
 
     protected override void OnPaintBackground(PaintEventArgs e)
     {
         if (Width <= 0 || Height <= 0) return;
+        Graphics g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        float W = Width, H = Height;
         using (LinearGradientBrush br = new LinearGradientBrush(
             ClientRectangle, Theme.SplashTop, Theme.SplashBottom, LinearGradientMode.Vertical))
         {
-            e.Graphics.FillRectangle(br, ClientRectangle);
+            g.FillRectangle(br, ClientRectangle);
+        }
+        // 柔光飘带
+        for (int i = 0; i < 2; i++)
+        {
+            float yBase = H * (0.30f + 0.22f * i);
+            using (Pen pen = new Pen(Color.FromArgb(36, 255, 255, 255), Theme.Px(18 + i * 8)))
+            {
+                pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
+                g.DrawBezier(pen, -W * 0.1f, yBase, W * 0.3f, yBase - Theme.Px(48),
+                    W * 0.7f, yBase + Theme.Px(40), W * 1.1f, yBase - Theme.Px(16));
+            }
+        }
+        // 星尘
+        Random sr = new Random(5);
+        for (int i = 0; i < 34; i++)
+        {
+            float sx = (float)sr.NextDouble() * W;
+            float sy = (float)sr.NextDouble() * H * 0.72f;
+            float sz = 1f + (float)sr.NextDouble() * 2.2f;
+            int a = 40 + sr.Next(70);
+            using (SolidBrush sb = new SolidBrush(Color.FromArgb(a, 255, 255, 255)))
+                g.FillEllipse(sb, sx, sy, sz * Theme.S, sz * Theme.S);
+        }
+        // 底部水波
+        using (Pen p1 = new Pen(Color.FromArgb(40, 56, 189, 248), 2.5f))
+        using (Pen p2 = new Pen(Color.FromArgb(28, 56, 189, 248), 2f))
+        {
+            g.DrawBezier(p1, -40, H - Theme.Px(46),
+                W / 3, H - Theme.Px(110), W * 2 / 3, H - Theme.Px(4), W + 40, H - Theme.Px(64));
+            g.DrawBezier(p2, -40, H - Theme.Px(20),
+                W / 3, H - Theme.Px(80), W * 2 / 3, H + Theme.Px(20), W + 40, H - Theme.Px(36));
+        }
+        // 右侧剪影
+        if (silhouette != null)
+        {
+            float sh = H * 0.94f;
+            float sw = sh * silhouette.Width / silhouette.Height;
+            Rectangle dest = new Rectangle((int)(W - sw + Theme.Px(36)), (int)(H - sh + Theme.Px(8)), (int)sw, (int)sh);
+            System.Drawing.Imaging.ImageAttributes ia = new System.Drawing.Imaging.ImageAttributes();
+            System.Drawing.Imaging.ColorMatrix cm = new System.Drawing.Imaging.ColorMatrix();
+            cm.Matrix33 = 0.17f;
+            ia.SetColorMatrix(cm);
+            g.DrawImage(silhouette, dest, 0, 0, silhouette.Width, silhouette.Height, GraphicsUnit.Pixel, ia);
         }
     }
 
@@ -1636,6 +1779,7 @@ class SplashForm : Form
     {
         stopRender = true;
         if (renderThread != null) renderThread.Join(300);
+        if (silhouette != null) { silhouette.Dispose(); silhouette = null; }
         base.OnFormClosing(e);
     }
 
@@ -1725,6 +1869,11 @@ class MainForm : Form
     {
         NavigateInstant("components");
         ((ComponentsPage)pages["components"]).OpenDetail(i, true);
+    }
+
+    internal void OpenComponentDetailAnim(int i)
+    {
+        ((ComponentsPage)pages["components"]).OpenDetail(i, false);
     }
 
     Thread runThread;
@@ -2185,8 +2334,9 @@ class MainForm : Form
     // 控件内容快照（WM_PRINT 强制同步绘制，不经 DWM 合成，过渡动画专用）
     internal static Bitmap Shot(Control c)
     {
-        Bitmap b = new Bitmap(Math.Max(1, c.Width), Math.Max(1, c.Height));
-        c.DrawToBitmap(b, new Rectangle(0, 0, c.Width, c.Height));
+        int w = Math.Max(1, c.Width), h = Math.Max(1, c.Height);
+        Bitmap b = new Bitmap(w, h);
+        c.DrawToBitmap(b, new Rectangle(0, 0, w, h));
         return b;
     }
 
@@ -2237,10 +2387,12 @@ class MainForm : Form
         // 快照过渡：两个页面各截一张位图，在单个表面上做纯位移动画。
         // 不移动任何 HWND，根绝滑动残影/叠影。
         old.SetBounds(0, 0, contentPanel.Width, contentPanel.Height);
+        if (old is ComponentsPage) ((ComponentsPage)old).ForceFinishTr();
         Bitmap fromBmp = Shot(old);
         target.SetBounds(0, 0, contentPanel.Width, contentPanel.Height);
         target.PerformLayout();
         target.Visible = true;
+        if (target is ComponentsPage) ((ComponentsPage)target).ForceFinishTr();
         if (target is ComponentsPage) ((ComponentsPage)target).SyncUnderlayVisibility();
         Bitmap toBmp = Shot(target);
         target.Visible = false;
