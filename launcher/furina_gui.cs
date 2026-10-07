@@ -870,6 +870,7 @@ class HomePage : Page
         int btnTop = subBottom + Theme.Px(28);
         BtnMain = new CapsuleButton();
         BtnMain.Text = "▶ 启动全部组件";
+        BtnMain.ForeColor = Color.White;   // 蓝色主按钮上恒定白字，两种形态下都可读
         BtnMain.Size = new Size(Theme.Px(210), Theme.Px(44));
         BtnMain.BaseColor = Theme.Lerp(Theme.AquaDeep, Color.Black, 0.55);
         BtnMain.HoverColor = Theme.Lerp(Theme.AquaDeep, Color.Black, 0.35);
@@ -1981,18 +1982,6 @@ class MainForm : Form
             navRail.Controls.Add(nav);
             navItems[items[i][2]] = nav;
         }
-
-        // 底部副标题
-        Label sub = new Label();
-        sub.Text = "枫丹夜海";
-        sub.Font = Theme.FontSmall;
-        sub.ForeColor = Theme.Dim;
-        sub.AutoSize = true;
-        sub.BackColor = Color.Transparent;
-        sub.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
-        sub.Location = new Point(Theme.Px(18), Height - Theme.Px(70));
-        navRail.Controls.Add(sub);
-        navRail.Resize += delegate { sub.Top = navRail.Height - Theme.Px(40); };
 
         contentPanel = new Panel();
         contentPanel.Dock = DockStyle.Fill;
