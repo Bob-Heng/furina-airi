@@ -325,6 +325,7 @@ public class Furina
         DateTime deadline = DateTime.Now.AddSeconds(timeoutSec);
         while (DateTime.Now < deadline)
         {
+            if (closing || stopRequested) { Log(label + " 就绪等待被停止信号中断"); return false; }
             if (Probe(url)) { Log(label + " 就绪"); return true; }
             Thread.Sleep(2000);
         }

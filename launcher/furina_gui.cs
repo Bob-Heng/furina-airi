@@ -1407,12 +1407,10 @@ class ComponentsPage : Page
             SyncUnderlayVisibility();
             return;
         }
-        Bitmap fromBmp = MainForm.ScreenShot(this);
+        Bitmap fromBmp = MainForm.Shot(this);
         d.PerformLayout();
         d.Visible = true;
-        d.BringToFront();
-        d.Refresh();
-        Bitmap toBmp = MainForm.ScreenShot(d);
+        Bitmap toBmp = MainForm.Shot(d);
         d.Visible = false;
         activeDetail = d;
         detailOpen = true;
@@ -1438,12 +1436,11 @@ class ComponentsPage : Page
         detailOpen = false;
         activeDetail = null;
         if (instant) { d.Visible = false; d.Left = 0; SyncUnderlayVisibility(); return; }
-        Bitmap fromBmp = MainForm.ScreenShot(d);
+        Bitmap fromBmp = MainForm.Shot(d);
         d.Visible = false;
         d.Left = 0;
         SyncUnderlayVisibility();
-        Refresh();
-        Bitmap toBmp = MainForm.ScreenShot(this);
+        Bitmap toBmp = MainForm.Shot(this);
         SlideTransition tr = new SlideTransition(fromBmp, toBmp, -1, delegate(SlideTransition self)
         {
             Controls.Remove(self);
@@ -2185,8 +2182,15 @@ class MainForm : Form
     internal void Navigate(string key) { Navigate(key, false, false); }
     internal void NavigateInstant(string key) { Navigate(key, true, true); }
 
-    // 控件内容快照（屏幕直采：所见即所得，无 WM_PRINT 的非客户区偏移/背景缺失）
-    // 注意：要求控件可见且位于最前
+    // 控件内容快照（WM_PRINT 强制同步绘制，不经 DWM 合成，过渡动画专用）
+    internal static Bitmap Shot(Control c)
+    {
+        Bitmap b = new Bitmap(Math.Max(1, c.Width), Math.Max(1, c.Height));
+        c.DrawToBitmap(b, new Rectangle(0, 0, c.Width, c.Height));
+        return b;
+    }
+
+    // 屏幕直采（仅用于窗体级主题切换快照：所见即所得，但要求控件可见且位于最前）
     internal static Bitmap ScreenShot(Control c)
     {
         Rectangle r = c.RectangleToScreen(c.ClientRectangle);
@@ -2233,18 +2237,13 @@ class MainForm : Form
         // 快照过渡：两个页面各截一张位图，在单个表面上做纯位移动画。
         // 不移动任何 HWND，根绝滑动残影/叠影。
         old.SetBounds(0, 0, contentPanel.Width, contentPanel.Height);
-        old.BringToFront();
-        old.Refresh();
-        Bitmap fromBmp = ScreenShot(old);
+        Bitmap fromBmp = Shot(old);
         target.SetBounds(0, 0, contentPanel.Width, contentPanel.Height);
         target.PerformLayout();
         target.Visible = true;
         if (target is ComponentsPage) ((ComponentsPage)target).SyncUnderlayVisibility();
-        target.BringToFront();
-        target.Refresh();
-        Bitmap toBmp = ScreenShot(target);
+        Bitmap toBmp = Shot(target);
         target.Visible = false;
-        old.BringToFront();
         currentPage = target;
 
         Page oldPage = old, targetPage = target;
@@ -2275,6 +2274,9 @@ class MainForm : Form
         if (runThread != null && runThread.IsAlive)
         {
             Furina.RequestStop();
+            // 乐观反馈：主题与按钮立即回荒形态，回收由 watcher 线程在后台收尾
+            SetMainButton(false);
+            SwitchTheme(UiTheme.Huang, true);
         }
         else
         {
