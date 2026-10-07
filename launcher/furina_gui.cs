@@ -412,10 +412,11 @@ class CapsuleButton : Control
     public CapsuleButton()
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
-            | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw
+            | ControlStyles.SupportsTransparentBackColor, true);
         Font = Theme.FontBody;
         ForeColor = Theme.Ink;
-        BackColor = Theme.Panel;
+        BackColor = Color.Transparent;
         anim = new System.Windows.Forms.Timer();
         anim.Interval = 16;
         anim.Tick += delegate
@@ -488,10 +489,11 @@ class StatusPill : Control
     public StatusPill(string name)
     {
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
-            | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw
+            | ControlStyles.SupportsTransparentBackColor, true);
         Font = Theme.FontSmall;
         Size = new Size(Theme.Px(104), Theme.Px(24));
-        BackColor = Theme.Panel;
+        BackColor = Color.Transparent;
         Name_ = name;
         anim = new System.Windows.Forms.Timer();
         anim.Interval = 16;
@@ -829,6 +831,7 @@ class HomePage : Page
     double t0 = Environment.TickCount / 1000.0;
     float parX, parY, parTX, parTY;
     Image silhouette;
+    Bitmap frameBmp;
     bool running;
     int x0, brandBottom, subBottom, stTitleY, pillsY, hintY;
 
@@ -897,10 +900,40 @@ class HomePage : Page
         sceneTimer.Interval = 33;
         sceneTimer.Tick += delegate
         {
+            if (Width <= 0 || Height <= 0) return;
             parX += (parTX - parX) * 0.10f;
             parY += (parTY - parY) * 0.10f;
-            Invalidate();
+            RenderFrame();
+            Invalidate(true);
         };
+    }
+
+    void EnsureFrameBmp()
+    {
+        int w = Math.Max(1, Width), h = Math.Max(1, Height);
+        if (frameBmp == null || frameBmp.Width != w || frameBmp.Height != h)
+        {
+            if (frameBmp != null) frameBmp.Dispose();
+            frameBmp = new Bitmap(w, h);
+        }
+    }
+
+    void RenderFrame()
+    {
+        EnsureFrameBmp();
+        using (Graphics g = Graphics.FromImage(frameBmp))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            RenderScene(g, Environment.TickCount / 1000.0 - t0);
+        }
+    }
+
+    // 页面与所有透明子控件共用同一张帧图：圆角控件的四角从此与场景零色差
+    protected override void OnPaintBackground(PaintEventArgs e)
+    {
+        if (Width <= 0 || Height <= 0) return;
+        if (frameBmp == null) RenderFrame();
+        e.Graphics.DrawImageUnscaled(frameBmp, 0, 0);
     }
 
     internal void SetRunning(bool v) { running = v; }
@@ -929,21 +962,40 @@ class HomePage : Page
             sceneTimer.Stop();
             sceneTimer.Dispose();
             if (silhouette != null) silhouette.Dispose();
+            if (frameBmp != null) frameBmp.Dispose();
         }
         base.Dispose(disposing);
     }
 
     float Par(float depth) { return depth; }
 
-    protected override void OnPaint(PaintEventArgs e)
+    void RenderScene(Graphics g, double t)
     {
-        base.OnPaint(e);   // 三段渐变 + 静态星点（Page）
-        if (Width <= 0 || Height <= 0) return;
-        Graphics g = e.Graphics;
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        bool mang = Theme.Mode == UiTheme.Mang;
-        double t = Environment.TickCount / 1000.0 - t0;
         float W = Width, H = Height;
+        // 底：三段渐变（参考图2 夜空层次）+ 静态星点（与 Page 同源，融入帧图）
+        using (LinearGradientBrush br = new LinearGradientBrush(
+            ClientRectangle, Theme.BgTop, Theme.BgBottom, LinearGradientMode.Vertical))
+        {
+            ColorBlend blend = new ColorBlend(3);
+            blend.Colors = new Color[] { Theme.BgTop, Theme.BgMid, Theme.BgBottom };
+            blend.Positions = new float[] { 0f, 0.55f, 1f };
+            br.InterpolationColors = blend;
+            g.FillRectangle(br, ClientRectangle);
+        }
+        bool mang = Theme.Mode == UiTheme.Mang;
+        {
+            Random rnd = new Random(Key.GetHashCode());
+            int n0 = (int)W / 46;
+            for (int i = 0; i < n0; i++)
+            {
+                int sx = rnd.Next((int)W), sy = rnd.Next((int)(H * 3 / 5));
+                int sz = rnd.Next(1, 4);
+                int sa = mang ? rnd.Next(14, 40) : rnd.Next(18, 60);
+                Color sc = mang ? Color.FromArgb(sa, 255, 255, 255) : Color.FromArgb(sa, 200, 235, 255);
+                using (SolidBrush sb = new SolidBrush(sc))
+                    g.FillEllipse(sb, sx, sy, sz, sz);
+            }
+        }
         float dx = parX * Theme.Px(14), dy = parY * Theme.Px(9);
 
         // ---- 极光飘带（参考图1 流动缎带，相位漂移）----
@@ -1070,7 +1122,7 @@ class HomePage : Page
                 RectangleF dest = new RectangleF(W - sw + Theme.Px(30), H - sh + Theme.Px(26), sw, sh);
                 System.Drawing.Imaging.ImageAttributes ia = new System.Drawing.Imaging.ImageAttributes();
                 System.Drawing.Imaging.ColorMatrix cm = new System.Drawing.Imaging.ColorMatrix();
-                cm.Matrix33 = mang ? 0.10f : 0.16f;
+                cm.Matrix33 = mang ? 0.13f : 0.20f;
                 ia.SetColorMatrix(cm);
                 g.DrawImage(silhouette, new Rectangle((int)dest.X, (int)dest.Y, (int)dest.Width, (int)dest.Height), 0, 0, silhouette.Width, silhouette.Height, GraphicsUnit.Pixel, ia);
                 g.Restore(gs6);
@@ -1355,10 +1407,12 @@ class ComponentsPage : Page
             SyncUnderlayVisibility();
             return;
         }
-        Bitmap fromBmp = MainForm.Shot(this);
+        Bitmap fromBmp = MainForm.ScreenShot(this);
         d.PerformLayout();
         d.Visible = true;
-        Bitmap toBmp = MainForm.Shot(d);
+        d.BringToFront();
+        d.Refresh();
+        Bitmap toBmp = MainForm.ScreenShot(d);
         d.Visible = false;
         activeDetail = d;
         detailOpen = true;
@@ -1384,11 +1438,12 @@ class ComponentsPage : Page
         detailOpen = false;
         activeDetail = null;
         if (instant) { d.Visible = false; d.Left = 0; SyncUnderlayVisibility(); return; }
-        Bitmap fromBmp = MainForm.Shot(d);
+        Bitmap fromBmp = MainForm.ScreenShot(d);
         d.Visible = false;
         d.Left = 0;
         SyncUnderlayVisibility();
-        Bitmap toBmp = MainForm.Shot(this);
+        Refresh();
+        Bitmap toBmp = MainForm.ScreenShot(this);
         SlideTransition tr = new SlideTransition(fromBmp, toBmp, -1, delegate(SlideTransition self)
         {
             Controls.Remove(self);
@@ -2130,11 +2185,14 @@ class MainForm : Form
     internal void Navigate(string key) { Navigate(key, false, false); }
     internal void NavigateInstant(string key) { Navigate(key, true, true); }
 
-    // 控件内容快照（WM_PRINT 强制绘制，隐藏控件亦可截取）
-    internal static Bitmap Shot(Control c)
+    // 控件内容快照（屏幕直采：所见即所得，无 WM_PRINT 的非客户区偏移/背景缺失）
+    // 注意：要求控件可见且位于最前
+    internal static Bitmap ScreenShot(Control c)
     {
-        Bitmap b = new Bitmap(Math.Max(1, c.Width), Math.Max(1, c.Height));
-        c.DrawToBitmap(b, new Rectangle(0, 0, c.Width, c.Height));
+        Rectangle r = c.RectangleToScreen(c.ClientRectangle);
+        Bitmap b = new Bitmap(Math.Max(1, r.Width), Math.Max(1, r.Height));
+        using (Graphics g = Graphics.FromImage(b))
+            g.CopyFromScreen(r.Location, Point.Empty, r.Size);
         return b;
     }
 
@@ -2175,13 +2233,18 @@ class MainForm : Form
         // 快照过渡：两个页面各截一张位图，在单个表面上做纯位移动画。
         // 不移动任何 HWND，根绝滑动残影/叠影。
         old.SetBounds(0, 0, contentPanel.Width, contentPanel.Height);
-        Bitmap fromBmp = Shot(old);
+        old.BringToFront();
+        old.Refresh();
+        Bitmap fromBmp = ScreenShot(old);
         target.SetBounds(0, 0, contentPanel.Width, contentPanel.Height);
         target.PerformLayout();
         target.Visible = true;
         if (target is ComponentsPage) ((ComponentsPage)target).SyncUnderlayVisibility();
-        Bitmap toBmp = Shot(target);
+        target.BringToFront();
+        target.Refresh();
+        Bitmap toBmp = ScreenShot(target);
         target.Visible = false;
+        old.BringToFront();
         currentPage = target;
 
         Page oldPage = old, targetPage = target;
@@ -2277,7 +2340,7 @@ class MainForm : Form
         Bitmap snap = null;
         if (animate)
         {
-            try { snap = Shot(this); } catch { }
+            try { snap = ScreenShot(this); } catch { }
         }
         Theme.SetMode(m);
         ApplyTheme(oldField, oldMuted, oldInk, oldDim, oldAqua, oldGold, oldNavHover);
@@ -2292,7 +2355,6 @@ class MainForm : Form
         {
             if (c is NavItem) { c.BackColor = Theme.NavBg; }
             else if (c is TextBoxBase) { c.BackColor = Theme.FieldBg; c.ForeColor = Theme.Ink; }
-            else if (c is StatusPill) { c.BackColor = Theme.Panel; }
             else if (c is ComponentRow && c.Tag is int) { ((ComponentRow)c).Accent = Theme.CompAccent((int)c.Tag); }
             else if (c is Label && c.Tag is int) { c.ForeColor = Theme.CompAccent((int)c.Tag); }
             else if (c is Panel && !(c is Page) && !(c is CardPanel) && c.BackColor == oldField) c.BackColor = Theme.FieldBg;
