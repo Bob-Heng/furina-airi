@@ -95,9 +95,9 @@ class Program
 
     static void RunSelfShot(MainForm f)
     {
-        // 逐页截图：home -> components -> 组件二级配置 -> guide -> logs
+        // 逐页截图：home(荒) -> home(芒) -> components -> 组件二级配置 -> guide -> logs
         // 两拍制：本拍截图、下一拍切页（不阻塞 UI 线程）
-        string[] order = { "home", "components", "compdetail", "guide", "logs" };
+        string[] order = { "home", "homemang", "components", "compdetail", "guide", "logs" };
         int idx = 0;
         bool captured = false;
         System.Windows.Forms.Timer t = new System.Windows.Forms.Timer();
@@ -127,8 +127,13 @@ class Program
             idx++;
             if (idx < order.Length)
             {
-                if (order[idx] == "compdetail") f.OpenComponentDetailForShot(0);
-                else f.NavigateInstant(order[idx]);
+                if (order[idx] == "homemang") f.SwitchThemeForShot(true);
+                else
+                {
+                    if (Theme.Mode == UiTheme.Mang) f.SwitchThemeForShot(false);
+                    if (order[idx] == "compdetail") f.OpenComponentDetailForShot(0);
+                    else f.NavigateInstant(order[idx]);
+                }
                 captured = false;
             }
         };
@@ -189,28 +194,71 @@ class Program
 }
 
 // ---------------------------------------------------------------
-// 主题令牌：枫丹夜海
+// 主题令牌：枫丹双形态 —— 荒（停止·夜海）/ 芒（运行·晴昼）
 // ---------------------------------------------------------------
+enum UiTheme { Huang, Mang }
+
 static class Theme
 {
-    public static readonly Color BgTop = Color.FromArgb(15, 23, 52);
-    public static readonly Color BgBottom = Color.FromArgb(9, 14, 32);
-    public static readonly Color Panel = Color.FromArgb(20, 31, 64);
-    public static readonly Color PanelBorder = Color.FromArgb(42, 60, 100);
-    public static readonly Color FieldBg = Color.FromArgb(14, 24, 56);
-    public static readonly Color NavBg = Color.FromArgb(12, 19, 44);
-    public static readonly Color NavHover = Color.FromArgb(30, 44, 80);
-    public static readonly Color Ink = Color.FromArgb(234, 242, 251);
-    public static readonly Color Muted = Color.FromArgb(160, 180, 210);
-    public static readonly Color Aqua = Color.FromArgb(103, 232, 249);
-    public static readonly Color AquaDeep = Color.FromArgb(56, 189, 248);
-    public static readonly Color Gold = Color.FromArgb(231, 198, 107);
-    public static readonly Color Ok = Color.FromArgb(110, 231, 183);
-    public static readonly Color Err = Color.FromArgb(248, 113, 113);
-    public static readonly Color Dim = Color.FromArgb(70, 88, 128);
+    public static UiTheme Mode = UiTheme.Huang;
 
+    public static Color BgTop, BgMid, BgBottom;
+    public static Color Panel, PanelBorder, FieldBg, NavBg, NavHover;
+    public static Color Ink, Muted, Aqua, AquaDeep, Gold, Ok, Err, Dim;
+    public static Color BtnBase, BtnHover, LogInk;
+
+    // 启动画面固定为芒色（"蓝莓小蛋糕在路上"的预告）
     public static readonly Color SplashTop = Color.FromArgb(247, 251, 255);
     public static readonly Color SplashBottom = Color.FromArgb(219, 238, 250);
+
+    public static void SetMode(UiTheme m)
+    {
+        Mode = m;
+        if (m == UiTheme.Mang)
+        {
+            BgTop = Color.FromArgb(238, 248, 255);
+            BgMid = Color.FromArgb(214, 236, 252);
+            BgBottom = Color.FromArgb(186, 219, 246);
+            Panel = Color.FromArgb(252, 253, 255);
+            PanelBorder = Color.FromArgb(164, 198, 230);
+            FieldBg = Color.FromArgb(240, 248, 254);
+            NavBg = Color.FromArgb(224, 239, 251);
+            NavHover = Color.FromArgb(203, 227, 246);
+            Ink = Color.FromArgb(24, 48, 86);
+            Muted = Color.FromArgb(84, 114, 148);
+            Aqua = Color.FromArgb(16, 142, 192);
+            AquaDeep = Color.FromArgb(10, 116, 170);
+            Gold = Color.FromArgb(198, 154, 46);
+            Ok = Color.FromArgb(18, 158, 106);
+            Err = Color.FromArgb(216, 78, 78);
+            Dim = Color.FromArgb(140, 164, 192);
+            BtnBase = Color.FromArgb(255, 255, 255);
+            BtnHover = Color.FromArgb(228, 242, 252);
+            LogInk = Color.FromArgb(52, 84, 118);
+        }
+        else
+        {
+            BgTop = Color.FromArgb(26, 20, 64);
+            BgMid = Color.FromArgb(16, 42, 96);
+            BgBottom = Color.FromArgb(10, 26, 56);
+            Panel = Color.FromArgb(22, 34, 68);
+            PanelBorder = Color.FromArgb(48, 68, 110);
+            FieldBg = Color.FromArgb(14, 26, 58);
+            NavBg = Color.FromArgb(14, 20, 48);
+            NavHover = Color.FromArgb(34, 50, 92);
+            Ink = Color.FromArgb(236, 243, 252);
+            Muted = Color.FromArgb(158, 182, 214);
+            Aqua = Color.FromArgb(103, 232, 249);
+            AquaDeep = Color.FromArgb(56, 189, 248);
+            Gold = Color.FromArgb(231, 198, 107);
+            Ok = Color.FromArgb(110, 231, 183);
+            Err = Color.FromArgb(248, 113, 113);
+            Dim = Color.FromArgb(76, 96, 138);
+            BtnBase = Color.FromArgb(32, 48, 88);
+            BtnHover = Color.FromArgb(45, 65, 110);
+            LogInk = Color.FromArgb(180, 220, 235);
+        }
+    }
 
     public static string UiFontName = "Microsoft YaHei UI";
     public static readonly Font FontBrand;
@@ -225,6 +273,7 @@ static class Theme
 
     static Theme()
     {
+        SetMode(UiTheme.Huang);
         FontFamily fam = null;
         string fontFile = LocateUiFont();
         if (fontFile != null)
@@ -301,6 +350,18 @@ static class Theme
         return null;
     }
 
+    public static Color CompAccent(int i)
+    {
+        switch (i)
+        {
+            case 0: return Gold;   // NewAPI 网关
+            case 1: return Mode == UiTheme.Mang ? Color.FromArgb(120, 96, 220) : Color.FromArgb(167, 139, 250);   // LLM 守卫
+            case 2: return Aqua;   // 语音服务
+            case 3: return Mode == UiTheme.Mang ? Color.FromArgb(20, 160, 120) : Color.FromArgb(110, 231, 183);   // 语音适配器
+            default: return Mode == UiTheme.Mang ? Color.FromArgb(214, 92, 138) : Color.FromArgb(244, 150, 190);  // AIRI
+        }
+    }
+
     [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
     static extern int AddFontResourceEx(string lpszFilename, uint fl, IntPtr pdv);
     const uint FR_PRIVATE = 0x10;
@@ -341,8 +402,8 @@ static class Theme
 // ---------------------------------------------------------------
 class CapsuleButton : Control
 {
-    public Color BaseColor = Color.FromArgb(32, 48, 88);
-    public Color HoverColor = Color.FromArgb(45, 65, 110);
+    public Color BaseColor = Color.Empty;   // Empty = 跟随主题 BtnBase
+    public Color HoverColor = Color.Empty;  // Empty = 跟随主题 BtnHover
     public Color AccentColor = Color.Empty;
     double hoverT, pressT;
     bool hoverGoal, pressGoal;
@@ -380,16 +441,31 @@ class CapsuleButton : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
         int lift = (int)Math.Round(-1.5 * hoverT + 1.5 * pressT);
-        Color bg = Enabled ? Theme.Lerp(BaseColor, HoverColor, hoverT) : Theme.Dim;
+        Color cBase = BaseColor != Color.Empty ? BaseColor : Theme.BtnBase;
+        Color cHover = HoverColor != Color.Empty ? HoverColor : Theme.BtnHover;
+        Color bg = Enabled ? Theme.Lerp(cBase, cHover, hoverT) : Theme.Dim;
         using (GraphicsPath path = Theme.RoundRect(r, 10))
-        using (SolidBrush br = new SolidBrush(bg))
         {
-            g.FillPath(br, path);
-            Color border = AccentColor != Color.Empty
-                ? Theme.Lerp(AccentColor, Color.White, pressT * 0.3)
-                : Theme.Lerp(Theme.PanelBorder, Theme.Aqua, hoverT * 0.7);
-            using (Pen pen = new Pen(border, AccentColor != Color.Empty ? 1.6f : 1f))
-                g.DrawPath(pen, path);
+            // 悬停外发光（两层扩散描边）
+            Color glowSrc = AccentColor != Color.Empty ? AccentColor : Theme.Aqua;
+            if (Enabled && hoverT > 0.02)
+            {
+                using (GraphicsPath g1 = Theme.RoundRect(new Rectangle(-2, -2, Width + 3, Height + 3), 12))
+                using (Pen pg1 = new Pen(Color.FromArgb((int)(46 * hoverT), glowSrc), 2.4f))
+                    g.DrawPath(pg1, g1);
+                using (GraphicsPath g2 = Theme.RoundRect(new Rectangle(-4, -4, Width + 7, Height + 7), 14))
+                using (Pen pg2 = new Pen(Color.FromArgb((int)(20 * hoverT), glowSrc), 2f))
+                    g.DrawPath(pg2, g2);
+            }
+            using (SolidBrush br = new SolidBrush(bg))
+            {
+                g.FillPath(br, path);
+                Color border = AccentColor != Color.Empty
+                    ? Theme.Lerp(AccentColor, Color.White, pressT * 0.3)
+                    : Theme.Lerp(Theme.PanelBorder, Theme.Aqua, hoverT * 0.7);
+                using (Pen pen = new Pen(border, AccentColor != Color.Empty ? 1.6f : 1f))
+                    g.DrawPath(pen, path);
+            }
         }
         TextRenderer.DrawText(g, Text, Font,
             new Rectangle(0, lift, Width, Height), Enabled ? ForeColor : Theme.Muted,
@@ -589,10 +665,32 @@ class Page : Panel
     {
         // 窗口最小化等场景 ClientRectangle 为 0×0，渐变画刷会抛 ArgumentException
         if (Width <= 0 || Height <= 0) return;
+        Graphics g = e.Graphics;
+        // 三段渐变（参考图2 的夜空层次：靛紫→宝蓝→青）
         using (LinearGradientBrush br = new LinearGradientBrush(
             ClientRectangle, Theme.BgTop, Theme.BgBottom, LinearGradientMode.Vertical))
         {
-            e.Graphics.FillRectangle(br, ClientRectangle);
+            ColorBlend blend = new ColorBlend(3);
+            blend.Colors = new Color[] { Theme.BgTop, Theme.BgMid, Theme.BgBottom };
+            blend.Positions = new float[] { 0f, 0.55f, 1f };
+            br.InterpolationColors = blend;
+            g.FillRectangle(br, ClientRectangle);
+        }
+        // 静态星点（按页面 Key 播种，重绘稳定；低亮度氛围）
+        Random rnd = new Random(Key.GetHashCode());
+        int n = Width / 46;
+        for (int i = 0; i < n; i++)
+        {
+            int x = rnd.Next(Width), y = rnd.Next(Height * 3 / 5);
+            int sz = rnd.Next(1, 4);
+            int a;
+            if (Theme.Mode == UiTheme.Huang) a = rnd.Next(18, 60);
+            else a = rnd.Next(14, 40);
+            Color c = Theme.Mode == UiTheme.Huang
+                ? Color.FromArgb(a, 200, 235, 255)
+                : Color.FromArgb(a, 255, 255, 255);
+            using (SolidBrush sb = new SolidBrush(c))
+                g.FillEllipse(sb, x, y, sz, sz);
         }
     }
 }
@@ -657,6 +755,68 @@ class SlideTransition : Control
 }
 
 // ---------------------------------------------------------------
+// 主题切换淡出层：旧界面快照按透明度渐隐，露出新主题
+// ---------------------------------------------------------------
+class FadeOverlay : Control
+{
+    Bitmap old;
+    double t;
+    System.Windows.Forms.Timer timer;
+
+    FadeOverlay(Bitmap oldBmp)
+    {
+        old = oldBmp;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+            | ControlStyles.OptimizedDoubleBuffer, true);
+        timer = new System.Windows.Forms.Timer();
+        timer.Interval = 16;
+        double start = Environment.TickCount / 1000.0;
+        timer.Tick += delegate
+        {
+            t = Math.Min(1.0, (Environment.TickCount / 1000.0 - start) / 0.45);
+            Invalidate();
+            if (t >= 1)
+            {
+                timer.Stop();
+                if (Parent != null) Parent.Controls.Remove(this);
+                Dispose();
+            }
+        };
+    }
+
+    public static void Begin(MainForm f, Bitmap oldBmp)
+    {
+        FadeOverlay ov = new FadeOverlay(oldBmp);
+        ov.Bounds = f.ClientRectangle;
+        f.Controls.Add(ov);
+        ov.BringToFront();
+        ov.timer.Start();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (Width <= 0 || Height <= 0) return;
+        System.Drawing.Imaging.ImageAttributes ia = new System.Drawing.Imaging.ImageAttributes();
+        System.Drawing.Imaging.ColorMatrix cm = new System.Drawing.Imaging.ColorMatrix();
+        cm.Matrix33 = (float)(1 - t);
+        ia.SetColorMatrix(cm);
+        e.Graphics.DrawImage(old, new Rectangle(0, 0, Width, Height),
+            0, 0, old.Width, old.Height, GraphicsUnit.Pixel, ia);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            timer.Stop();
+            timer.Dispose();
+            if (old != null) old.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+}
+
+// ---------------------------------------------------------------
 // 主页
 // ---------------------------------------------------------------
 class HomePage : Page
@@ -664,36 +824,30 @@ class HomePage : Page
     public CapsuleButton BtnMain;
     public CapsuleButton BtnToSettings, BtnToGuide;
     public StatusPill[] Pills = new StatusPill[5];
-    public Label LblHint;
+
+    System.Windows.Forms.Timer sceneTimer;
+    double t0 = Environment.TickCount / 1000.0;
+    float parX, parY, parTX, parTY;
+    Image silhouette;
+    bool running;
+    int x0, brandBottom, subBottom, stTitleY, pillsY, hintY;
 
     public HomePage(MainForm owner) : base("home")
     {
-        int w = owner.ContentW, x0 = Theme.Px(48);
-        Label brand = new Label();
-        brand.Text = "芙宁娜";
-        brand.Font = Theme.FontHero;
-        brand.ForeColor = Theme.Aqua;
-        brand.AutoSize = true;
-        brand.BackColor = Color.Transparent;
-        brand.Location = new Point(x0, Theme.Px(56));
-        Controls.Add(brand);
+        x0 = Theme.Px(48);
+        SetStyle(ControlStyles.OptimizedDoubleBuffer, true);
 
-        Label sub = new Label();
-        sub.Text = "住在桌面上的她 · 一键拉起的全部世界";
-        sub.Font = Theme.FontBody;
-        sub.ForeColor = Theme.Muted;
-        sub.AutoSize = true;
-        sub.BackColor = Color.Transparent;
-        sub.Location = new Point(x0 + 2, brand.Bottom + Theme.Px(8));
-        Controls.Add(sub);
+        Size bs = TextRenderer.MeasureText("芙宁娜", Theme.FontHero);
+        brandBottom = Theme.Px(56) + bs.Height;
+        subBottom = brandBottom + Theme.Px(8) + TextRenderer.MeasureText("住在", Theme.FontBody).Height;
 
+        int btnTop = subBottom + Theme.Px(28);
         BtnMain = new CapsuleButton();
         BtnMain.Text = "▶ 启动全部组件";
-        BtnMain.Font = new Font("Microsoft YaHei UI", 11, FontStyle.Bold);
         BtnMain.Size = new Size(Theme.Px(210), Theme.Px(44));
         BtnMain.BaseColor = Theme.Lerp(Theme.AquaDeep, Color.Black, 0.55);
         BtnMain.HoverColor = Theme.Lerp(Theme.AquaDeep, Color.Black, 0.35);
-        BtnMain.Location = new Point(x0, sub.Bottom + Theme.Px(28));
+        BtnMain.Location = new Point(x0, btnTop);
         BtnMain.Click += delegate { owner.ToggleRun(); };
         Controls.Add(BtnMain);
 
@@ -701,64 +855,311 @@ class HomePage : Page
         BtnToGuide.Text = "使用教程";
         BtnToGuide.Size = new Size(Theme.Px(120), Theme.Px(44));
         BtnToGuide.AccentColor = Theme.Gold;
-        BtnToGuide.Location = new Point(BtnMain.Right + Theme.Px(14), BtnMain.Top);
+        BtnToGuide.Location = new Point(BtnMain.Right + Theme.Px(14), btnTop);
         BtnToGuide.Click += delegate { owner.Navigate("guide"); };
         Controls.Add(BtnToGuide);
 
         BtnToSettings = new CapsuleButton();
         BtnToSettings.Text = "组件配置";
         BtnToSettings.Size = new Size(Theme.Px(120), Theme.Px(44));
-        BtnToSettings.Location = new Point(BtnToGuide.Right + Theme.Px(14), BtnMain.Top);
+        BtnToSettings.Location = new Point(BtnToGuide.Right + Theme.Px(14), btnTop);
         BtnToSettings.Click += delegate { owner.Navigate("components"); };
         Controls.Add(BtnToSettings);
 
-        Label st = new Label();
-        st.Text = "全部组件";
-        st.Font = Theme.FontTitle;
-        st.ForeColor = Theme.Aqua;
-        st.AutoSize = true;
-        st.BackColor = Color.Transparent;
-        st.Location = new Point(x0, BtnMain.Bottom + Theme.Px(40));
-        Controls.Add(st);
+        stTitleY = btnTop + Theme.Px(44) + Theme.Px(40);
+        pillsY = stTitleY + TextRenderer.MeasureText("全部组件", Theme.FontTitle).Height + Theme.Px(10);
 
         string[] names = { "NewAPI", "LLM守卫", "语音服务", "语音适配器", "AIRI" };
         for (int i = 0; i < 5; i++)
         {
             Pills[i] = new StatusPill(names[i]);
             Pills[i].Tag = i;
-            Pills[i].Location = new Point(x0 + i * (Theme.Px(112)), st.Bottom + Theme.Px(10));
+            Pills[i].Location = new Point(x0 + i * (Theme.Px(112)), pillsY);
             Controls.Add(Pills[i]);
             owner.AllPills.Add(Pills[i]);
         }
+        hintY = pillsY + Theme.Px(24) + Theme.Px(28);
 
-        LblHint = new Label();
-        LblHint.Text = "双击启动器即可使用：配置完整时将自动启动全部组件。";
-        LblHint.Font = Theme.FontSmall;
-        LblHint.ForeColor = Theme.Dim;
-        LblHint.AutoSize = true;
-        LblHint.BackColor = Color.Transparent;
-        LblHint.Location = new Point(x0, Pills[0].Bottom + Theme.Px(28));
-        Controls.Add(LblHint);
+        try
+        {
+            Stream rs = System.Reflection.Assembly.GetExecutingAssembly()
+                .GetManifestResourceStream("furina-silhouette.png");
+            if (rs != null)
+            {
+                using (rs)
+                using (Bitmap tmp = (Bitmap)Image.FromStream(rs))
+                    silhouette = new Bitmap(tmp);
+            }
+        }
+        catch { }
+
+        sceneTimer = new System.Windows.Forms.Timer();
+        sceneTimer.Interval = 33;
+        sceneTimer.Tick += delegate
+        {
+            parX += (parTX - parX) * 0.10f;
+            parY += (parTY - parY) * 0.10f;
+            Invalidate();
+        };
     }
+
+    internal void SetRunning(bool v) { running = v; }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        if (Visible) sceneTimer.Start();
+        else sceneTimer.Stop();
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (Width > 0 && Height > 0)
+        {
+            parTX = (e.X - Width / 2f) / (Width / 2f);
+            parTY = (e.Y - Height / 2f) / (Height / 2f);
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            sceneTimer.Stop();
+            sceneTimer.Dispose();
+            if (silhouette != null) silhouette.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+
+    float Par(float depth) { return depth; }
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        base.OnPaint(e);
-        // 底部波缘（参考图1 的水波语言，低透明度曲线）
+        base.OnPaint(e);   // 三段渐变 + 静态星点（Page）
+        if (Width <= 0 || Height <= 0) return;
         Graphics g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        Rectangle r = ClientRectangle;
-        using (Pen p1 = new Pen(Color.FromArgb(28, Theme.Aqua), 2.5f))
-        using (Pen p2 = new Pen(Color.FromArgb(18, Theme.Aqua), 2f))
+        bool mang = Theme.Mode == UiTheme.Mang;
+        double t = Environment.TickCount / 1000.0 - t0;
+        float W = Width, H = Height;
+        float dx = parX * Theme.Px(14), dy = parY * Theme.Px(9);
+
+        // ---- 极光飘带（参考图1 流动缎带，相位漂移）----
+        GraphicsState gs1 = g.Save();
         {
-            g.DrawBezier(p1, -40, r.Bottom - Theme.Px(70),
-                r.Width / 3, r.Bottom - Theme.Px(150),
-                r.Width * 2 / 3, r.Bottom - Theme.Px(10),
-                r.Width + 40, r.Bottom - Theme.Px(90));
-            g.DrawBezier(p2, -40, r.Bottom - Theme.Px(30),
-                r.Width / 3, r.Bottom - Theme.Px(110),
-                r.Width * 2 / 3, r.Bottom + Theme.Px(30),
-                r.Width + 40, r.Bottom - Theme.Px(50));
+            g.TranslateTransform(dx * 0.35f, dy * 0.35f);
+            for (int i = 0; i < 3; i++)
+            {
+                float yBase = H * (0.20f + 0.17f * i) + (float)Math.Sin(t * 0.13 + i * 2.1) * Theme.Px(26);
+                Color rc = mang ? Color.FromArgb(22, 255, 255, 255) : Color.FromArgb(15 + i * 4, Theme.Aqua);
+                using (Pen pen = new Pen(rc, Theme.Px(20 + i * 6)))
+                {
+                    pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round;
+                    g.DrawBezier(pen,
+                        -W * 0.1f, yBase,
+                        W * 0.3f, yBase - Theme.Px(60) + (float)Math.Sin(t * 0.21 + i) * Theme.Px(30),
+                        W * 0.7f, yBase + Theme.Px(50),
+                        W * 1.1f, yBase - Theme.Px(20));
+                }
+            }
+            g.Restore(gs1);
+        }
+
+        // ---- 闪烁星尘 ----
+        GraphicsState gs2 = g.Save();
+        {
+            g.TranslateTransform(dx * 0.2f, dy * 0.2f);
+            Random sr = new Random(42);
+            int n = 42;
+            for (int i = 0; i < n; i++)
+            {
+                float sx = (float)sr.NextDouble() * W;
+                float sy = (float)sr.NextDouble() * H * 0.72f;
+                float sz = 1f + (float)sr.NextDouble() * 2.4f;
+                double sp = 0.5 + sr.NextDouble() * 1.3;
+                double ph = sr.NextDouble() * 6.283;
+                double a = 0.45 + 0.55 * Math.Sin(t * sp + ph);
+                if (a < 0) a = 0;
+                Color c = mang
+                    ? Color.FromArgb((int)(90 * a), 255, 255, 255)
+                    : Color.FromArgb((int)(140 * a), 200, 235, 255);
+                using (SolidBrush sb = new SolidBrush(c))
+                    g.FillEllipse(sb, sx, sy, sz * Theme.S, sz * Theme.S);
+            }
+            g.Restore(gs2);
+        }
+
+        // ---- 流星（仅荒夜，约 9 秒一颗）----
+        if (!mang)
+        {
+            double p = ((t + 3.7) % 9.0) / 1.1;
+            if (p < 1.0)
+            {
+                GraphicsState gs3 = g.Save();
+                {
+                    g.TranslateTransform(dx * 0.25f, dy * 0.25f);
+                    float mx0 = W * 0.72f, my0 = H * 0.14f;
+                    float mx1 = W * 0.30f, my1 = H * 0.40f;
+                    float px = mx0 + (mx1 - mx0) * (float)p, py = my0 + (my1 - my0) * (float)p;
+                    double a = Math.Sin(Math.PI * p);
+                    float len = Theme.Px(90);
+                    float ux = (mx1 - mx0), uy = (my1 - my0);
+                    float ul = (float)Math.Sqrt(ux * ux + uy * uy);
+                    ux /= ul; uy /= ul;
+                    using (Pen glow = new Pen(Color.FromArgb((int)(70 * a), Theme.Aqua), Theme.Px(4)))
+                    using (Pen core = new Pen(Color.FromArgb((int)(220 * a), 240, 250, 255), Theme.Px(2)))
+                    {
+                        glow.StartCap = LineCap.Round; glow.EndCap = LineCap.Round;
+                        core.StartCap = LineCap.Round; core.EndCap = LineCap.Round;
+                        g.DrawLine(glow, px, py, px - ux * len, py - uy * len);
+                        g.DrawLine(core, px, py, px - ux * len * 0.7f, py - uy * len * 0.7f);
+                    }
+                    g.Restore(gs3);
+                }
+            }
+        }
+
+        // ---- 上升气泡（荒）/ 光尘（芒）----
+        GraphicsState gs4 = g.Save();
+        {
+            g.TranslateTransform(dx * 0.45f, dy * 0.45f);
+            Random br = new Random(7);
+            for (int i = 0; i < 16; i++)
+            {
+                float bx = (float)br.NextDouble() * W;
+                float sz = Theme.Px(2) + (float)br.NextDouble() * Theme.Px(4);
+                double speed = H / (9 + br.NextDouble() * 7);
+                double off = br.NextDouble() * H;
+                double yRaw = H + 60 - ((t * speed + off) % (H + 120));
+                double prog = 1 - (yRaw + 60) / (H + 120);
+                double a = Math.Sin(Math.PI * Math.Min(1, Math.Max(0, prog * 1.15)));
+                float wx = bx + (float)Math.Sin(t * 1.3 + i * 1.7) * Theme.Px(5);
+                if (mang)
+                {
+                    using (SolidBrush sb = new SolidBrush(Color.FromArgb((int)(70 * a), 255, 244, 210)))
+                        g.FillEllipse(sb, wx, (float)yRaw, sz, sz);
+                }
+                else
+                {
+                    using (Pen pen = new Pen(Color.FromArgb((int)(80 * a), Theme.Aqua), 1.2f))
+                        g.DrawEllipse(pen, wx, (float)yRaw, sz, sz);
+                }
+            }
+            g.Restore(gs4);
+        }
+
+        // ---- 底部发光植物剪影（角落框景）----
+        GraphicsState gs5 = g.Save();
+        {
+            g.TranslateTransform(dx * 0.7f, dy * 0.7f);
+            DrawPlants(g, mang, 0, H, 1);
+            DrawPlants(g, mang, W, H, -1);
+            g.Restore(gs5);
+        }
+
+        // ---- 剪影水印（右下，用户素材）----
+        if (silhouette != null)
+        {
+            GraphicsState gs6 = g.Save();
+            {
+                g.TranslateTransform(dx * 0.3f, dy * 0.3f);
+                float sh = H * 0.66f;
+                float sw = sh * silhouette.Width / silhouette.Height;
+                RectangleF dest = new RectangleF(W - sw + Theme.Px(30), H - sh + Theme.Px(26), sw, sh);
+                System.Drawing.Imaging.ImageAttributes ia = new System.Drawing.Imaging.ImageAttributes();
+                System.Drawing.Imaging.ColorMatrix cm = new System.Drawing.Imaging.ColorMatrix();
+                cm.Matrix33 = mang ? 0.10f : 0.16f;
+                ia.SetColorMatrix(cm);
+                g.DrawImage(silhouette, new Rectangle((int)dest.X, (int)dest.Y, (int)dest.Width, (int)dest.Height), 0, 0, silhouette.Width, silhouette.Height, GraphicsUnit.Pixel, ia);
+                g.Restore(gs6);
+            }
+        }
+
+        // ---- 底部水波（动画相位）----
+        GraphicsState gs7 = g.Save();
+        {
+            g.TranslateTransform(dx * 0.55f, dy * 0.55f);
+            float wob1 = (float)Math.Sin(t * 0.5) * Theme.Px(18);
+            float wob2 = (float)Math.Sin(t * 0.33 + 1.7) * Theme.Px(22);
+            Color wc1 = mang ? Color.FromArgb(34, Theme.AquaDeep) : Color.FromArgb(30, Theme.Aqua);
+            Color wc2 = mang ? Color.FromArgb(26, Theme.AquaDeep) : Color.FromArgb(20, Theme.Aqua);
+            using (Pen p1 = new Pen(wc1, 2.5f))
+            using (Pen p2 = new Pen(wc2, 2f))
+            {
+                g.DrawBezier(p1, -40, H - Theme.Px(70),
+                    Width / 3, H - Theme.Px(150) + wob1,
+                    Width * 2 / 3, H - Theme.Px(10) - wob1,
+                    Width + 40, H - Theme.Px(90));
+                g.DrawBezier(p2, -40, H - Theme.Px(30),
+                    Width / 3, H - Theme.Px(110) + wob2,
+                    Width * 2 / 3, H + Theme.Px(30) - wob2,
+                    Width + 40, H - Theme.Px(50));
+            }
+            g.Restore(gs7);
+        }
+
+        // ---- 主按钮呼吸光环 ----
+        if (BtnMain != null && BtnMain.Visible && BtnMain.Enabled)
+        {
+            double pulse = 0.5 + 0.5 * Math.Sin(t * 1.6);
+            Color glowC = running ? Theme.Err : Theme.Aqua;
+            int ga = running ? 46 : (int)(26 + 34 * pulse);
+            using (GraphicsPath gp = new GraphicsPath())
+            {
+                Rectangle br = BtnMain.Bounds;
+                gp.AddEllipse(br.Left - Theme.Px(10), br.Top - Theme.Px(10),
+                    br.Width + Theme.Px(20), br.Height + Theme.Px(20));
+                using (PathGradientBrush pgb = new PathGradientBrush(gp))
+                {
+                    pgb.CenterColor = Color.FromArgb(ga, glowC);
+                    pgb.SurroundColors = new Color[] { Color.FromArgb(0, glowC) };
+                    g.FillPath(pgb, gp);
+                }
+            }
+        }
+
+        // ---- 文案（随场景每帧重绘，无透明标签撕裂）----
+        int tx = x0, ty = Theme.Px(56);
+        using (LinearGradientBrush brand = new LinearGradientBrush(
+            new Rectangle(tx, ty, 10, brandBottom - ty),
+            mang ? Color.FromArgb(20, 110, 200) : Color.FromArgb(240, 250, 255),
+            mang ? Color.FromArgb(60, 170, 230) : Theme.Aqua,
+            LinearGradientMode.Vertical))
+        {
+            g.DrawString("芙宁娜", Theme.FontHero, brand, tx, ty);
+        }
+        using (SolidBrush sb = new SolidBrush(Theme.Muted))
+            g.DrawString("住在桌面上的她 · 一键拉起的全部世界", Theme.FontBody, sb, tx + 2, brandBottom + Theme.Px(8));
+        using (SolidBrush sb = new SolidBrush(Theme.Aqua))
+            g.DrawString("全部组件", Theme.FontTitle, sb, tx, stTitleY);
+        using (SolidBrush sb = new SolidBrush(Theme.Dim))
+            g.DrawString("双击启动器即可使用：配置完整时将自动启动全部组件。", Theme.FontSmall, sb, tx, hintY);
+    }
+
+    // 角落发光植物（参考图2/图3 的框景叶片）
+    void DrawPlants(Graphics g, bool mang, float baseX, float baseY, int dir)
+    {
+        Random pr = new Random(dir > 0 ? 11 : 23);
+        Color fill = mang ? Color.FromArgb(110, 120, 185, 205) : Color.FromArgb(150, 10, 52, 74);
+        Color rim = mang ? Color.FromArgb(60, 255, 255, 255) : Color.FromArgb(56, Theme.Aqua);
+        for (int i = 0; i < 5; i++)
+        {
+            float bx = baseX + dir * (Theme.Px(6) + i * Theme.Px(14));
+            float hgt = Theme.Px(46) + (float)pr.NextDouble() * Theme.Px(60);
+            float bend = dir * (Theme.Px(10) + (float)pr.NextDouble() * Theme.Px(22));
+            using (GraphicsPath leaf = new GraphicsPath())
+            {
+                leaf.AddBezier(bx, baseY + 4, bx + bend * 0.3f, baseY - hgt * 0.5f,
+                    bx + bend, baseY - hgt * 0.8f, bx + bend * 1.15f, baseY - hgt);
+                leaf.AddBezier(bx + bend * 1.15f, baseY - hgt, bx + bend * 0.9f, baseY - hgt * 0.72f,
+                    bx + bend * 0.55f + Theme.Px(5), baseY - hgt * 0.42f, bx + dir * Theme.Px(7), baseY + 4);
+                using (SolidBrush fb = new SolidBrush(fill))
+                    g.FillPath(fb, leaf);
+                using (Pen rp = new Pen(rim, 1f))
+                    g.DrawPath(rp, leaf);
+            }
         }
     }
 }
@@ -770,15 +1171,17 @@ class ComponentRow : Control
 {
     public string Glyph, Title, Desc;
     public StatusPill Pill;
+    public Color Accent;
     double hoverT;
     System.Windows.Forms.Timer anim;
 
-    public ComponentRow(string glyph, string title, string desc, StatusPill pill)
+    public ComponentRow(string glyph, string title, string desc, StatusPill pill, Color accent)
     {
         Glyph = glyph;
         Title = title;
         Desc = desc;
         Pill = pill;
+        Accent = accent;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
             | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw
             | ControlStyles.SupportsTransparentBackColor, true);
@@ -788,12 +1191,12 @@ class ComponentRow : Control
         anim.Interval = 16;
         anim.Tick += delegate
         {
-            double t = _hover ? 1 : 0;
-            hoverT += (t - hoverT) * 0.3;
+            double tt = _hover ? 1 : 0;
+            hoverT += (tt - hoverT) * 0.3;
             Invalidate();
-            if (Math.Abs(hoverT - t) < 0.004) anim.Stop();
+            if (Math.Abs(hoverT - tt) < 0.004) anim.Stop();
         };
-        Pill.Location = new Point(Width - Pill.Width - Theme.Px(14), (Height - Pill.Height) / 2);
+        Pill.Location = new Point(Width - Pill.Width - Theme.Px(40), (Height - Pill.Height) / 2);
         Pill.Anchor = AnchorStyles.Top | AnchorStyles.Right;
         Controls.Add(Pill);
     }
@@ -812,11 +1215,17 @@ class ComponentRow : Control
         using (GraphicsPath path = Theme.RoundRect(r, Theme.Px(12)))
         {
             using (SolidBrush br = new SolidBrush(bg)) g.FillPath(br, path);
-            using (Pen pen = new Pen(Theme.Lerp(Theme.PanelBorder, Theme.Aqua, hoverT * 0.5), 1f))
+            using (Pen pen = new Pen(Theme.Lerp(Theme.PanelBorder, Accent, hoverT), 1f + (float)hoverT))
                 g.DrawPath(pen, path);
         }
+        // 左侧组件色竖条（专属色语言，hover 时亮起）
+        using (SolidBrush br = new SolidBrush(Color.FromArgb(90 + (int)(165 * hoverT), Accent)))
+        {
+            using (GraphicsPath bar = Theme.RoundRect(new Rectangle(0, Theme.Px(16), Theme.Px(4), Height - Theme.Px(32)), 3))
+                g.FillPath(br, bar);
+        }
         using (Font f = new Font(Theme.FontIcons, 15))
-        using (SolidBrush br = new SolidBrush(Theme.Lerp(Theme.Aqua, Color.White, hoverT * 0.4)))
+        using (SolidBrush br = new SolidBrush(Theme.Lerp(Accent, Color.White, hoverT * 0.45)))
         {
             g.DrawString(Glyph, f, br, Theme.Px(18), Height / 2 - Theme.Px(15));
         }
@@ -827,6 +1236,16 @@ class ComponentRow : Control
         using (SolidBrush br = new SolidBrush(Theme.Muted))
         {
             g.DrawString(Desc, Theme.FontSmall, br, Theme.Px(58), Theme.Px(38));
+        }
+        // 右侧 "›"：hover 时从右滑入，提示可点击
+        if (hoverT > 0.02)
+        {
+            using (SolidBrush br = new SolidBrush(Color.FromArgb((int)(230 * hoverT), Accent)))
+            using (Font f = new Font(Theme.UiFontName, 16, FontStyle.Bold))
+            {
+                float cx = Width - Theme.Px(30) + (1 - (float)Theme.EaseOut(hoverT)) * Theme.Px(10);
+                g.DrawString("›", f, br, cx, Height / 2 - Theme.Px(14));
+            }
         }
     }
 }
@@ -869,7 +1288,8 @@ class ComponentsPage : Page
             StatusPill pill = new StatusPill(rows[i][1].Split(' ')[0]);
             pill.Tag = i;
             owner.AllPills.Add(pill);
-            ComponentRow row = new ComponentRow(rows[i][0], rows[i][1], rows[i][2], pill);
+            ComponentRow row = new ComponentRow(rows[i][0], rows[i][1], rows[i][2], pill, Theme.CompAccent(i));
+            row.Tag = i;
             row.Top = Theme.Px(12) + i * (Theme.Px(80));
             row.Left = x0;
             row.Width = owner.ContentW - x0 - Theme.Px(20);
@@ -1271,6 +1691,8 @@ class MainForm : Form
             if (ics != null) Icon = new Icon(ics);
         }
         catch { }
+        // 配置完整自动启动：直接以芒形态（运行中）构建界面
+        if (Program.AutoStarted) Theme.SetMode(UiTheme.Mang);
         Width = Theme.Px(1120);
         Height = Theme.Px(720);
         StartPosition = FormStartPosition.CenterScreen;
@@ -1421,6 +1843,7 @@ class MainForm : Form
         };
         Page page = new Page("compDetail" + idx);
         int x0 = Theme.Px(28);
+        Color accent = Theme.CompAccent(idx);
 
         CapsuleButton back = new CapsuleButton();
         back.Text = "‹ 组件列表";
@@ -1432,7 +1855,8 @@ class MainForm : Form
         Label t = new Label();
         t.Text = meta[idx][0];
         t.Font = Theme.FontTitle;
-        t.ForeColor = Theme.Aqua;
+        t.ForeColor = accent;
+        t.Tag = idx;
         t.AutoSize = true;
         t.BackColor = Color.Transparent;
         t.Location = new Point(back.Right + Theme.Px(12), Theme.Px(24));
@@ -1460,7 +1884,7 @@ class MainForm : Form
         col.FlowDirection = FlowDirection.TopDown;
         col.WrapContents = false;
         col.BackColor = Color.Transparent;
-        col.Controls.Add(CardTitle("配置"));
+        col.Controls.Add(CardTitle("配置", accent));
         card.Controls.Add(col);
 
         if (idx == 1)
@@ -1804,6 +2228,7 @@ class MainForm : Form
         t.IsBackground = true;
         t.Start();
         AttachRun(t);
+        SwitchTheme(UiTheme.Mang, true);
     }
 
     void AttachRun(Thread t)
@@ -1817,6 +2242,7 @@ class MainForm : Form
             {
                 SetMainButton(false);
                 AppendLog("已停止。可以修改配置后重新启动。");
+                SwitchTheme(UiTheme.Huang, true);
             });
         });
         watcher.IsBackground = true;
@@ -1826,6 +2252,7 @@ class MainForm : Form
     void SetMainButton(bool running)
     {
         if (home == null) return;
+        home.SetRunning(running);
         if (running)
         {
             home.BtnMain.Text = "■ 停止全部组件";
@@ -1836,6 +2263,71 @@ class MainForm : Form
             home.BtnMain.Text = "▶ 启动全部组件";
             home.BtnMain.AccentColor = Color.Empty;
         }
+    }
+
+    // ---------------------------------------------------------------
+    // 荒/芒主题切换
+    // ---------------------------------------------------------------
+
+    internal void SwitchTheme(UiTheme m, bool animate)
+    {
+        if (Theme.Mode == m) return;
+        Color oldField = Theme.FieldBg, oldMuted = Theme.Muted, oldInk = Theme.Ink,
+              oldDim = Theme.Dim, oldAqua = Theme.Aqua, oldGold = Theme.Gold, oldNavHover = Theme.NavHover;
+        Bitmap snap = null;
+        if (animate)
+        {
+            try { snap = Shot(this); } catch { }
+        }
+        Theme.SetMode(m);
+        ApplyTheme(oldField, oldMuted, oldInk, oldDim, oldAqua, oldGold, oldNavHover);
+        if (snap != null) FadeOverlay.Begin(this, snap);
+    }
+
+    void ApplyTheme(Color oldField, Color oldMuted, Color oldInk, Color oldDim,
+        Color oldAqua, Color oldGold, Color oldNavHover)
+    {
+        navRail.BackColor = Theme.NavBg;
+        foreach (Control c in Walk(this))
+        {
+            if (c is NavItem) { c.BackColor = Theme.NavBg; }
+            else if (c is TextBoxBase) { c.BackColor = Theme.FieldBg; c.ForeColor = Theme.Ink; }
+            else if (c is StatusPill) { c.BackColor = Theme.Panel; }
+            else if (c is ComponentRow && c.Tag is int) { ((ComponentRow)c).Accent = Theme.CompAccent((int)c.Tag); }
+            else if (c is Label && c.Tag is int) { c.ForeColor = Theme.CompAccent((int)c.Tag); }
+            else if (c is Panel && !(c is Page) && !(c is CardPanel) && c.BackColor == oldField) c.BackColor = Theme.FieldBg;
+            if (c is Label || c is CapsuleButton)
+            {
+                if (c.ForeColor == oldMuted) c.ForeColor = Theme.Muted;
+                else if (c.ForeColor == oldInk) c.ForeColor = Theme.Ink;
+                else if (c.ForeColor == oldDim) c.ForeColor = Theme.Dim;
+                else if (c.ForeColor == oldAqua) c.ForeColor = Theme.Aqua;
+                else if (c.ForeColor == oldGold) c.ForeColor = Theme.Gold;
+            }
+        }
+        txtLog.ForeColor = Theme.LogInk;
+        home.BtnMain.BaseColor = Theme.Lerp(Theme.AquaDeep,
+            Theme.Mode == UiTheme.Mang ? Color.White : Color.Black,
+            Theme.Mode == UiTheme.Mang ? 0.10 : 0.55);
+        home.BtnMain.HoverColor = Theme.Lerp(Theme.AquaDeep,
+            Theme.Mode == UiTheme.Mang ? Color.White : Color.Black,
+            Theme.Mode == UiTheme.Mang ? 0.0 : 0.35);
+        ValidateAll();
+        Invalidate(true);
+    }
+
+    static System.Collections.Generic.IEnumerable<Control> Walk(Control c)
+    {
+        yield return c;
+        foreach (Control ch in c.Controls)
+            foreach (Control x in Walk(ch))
+                yield return x;
+    }
+
+    internal void SwitchThemeForShot(bool mang)
+    {
+        SwitchTheme(mang ? UiTheme.Mang : UiTheme.Huang, false);
+        SnapNavForShot();
     }
 
     // ---------------------------------------------------------------
@@ -1902,12 +2394,14 @@ class MainForm : Form
     // 配置字段辅助
     // ---------------------------------------------------------------
 
-    Label CardTitle(string text)
+    Label CardTitle(string text) { return CardTitle(text, Theme.Aqua); }
+
+    Label CardTitle(string text, Color c)
     {
         Label l = new Label();
         l.Text = text;
         l.Font = Theme.FontTitle;
-        l.ForeColor = Theme.Aqua;
+        l.ForeColor = c;
         l.AutoSize = true;
         l.BackColor = Color.Transparent;
         l.Margin = new Padding(0, 2, 0, Theme.Px(8));
