@@ -13,9 +13,15 @@ if not exist "%CSC%" (
 
 rem 源文件为 UTF-8，/codepage:65001 告诉编译器按 UTF-8 读取
 rem /target:winexe = GUI 程序（双击无控制台黑窗）；加参数运行仍可走控制台模式
+rem /win32icon = exe 图标（开始菜单/资源管理器）
+rem /resource = 嵌入资源：窗口/任务栏图标、得意黑备用字体、芙宁娜剪影水印
 "%CSC%" /nologo /codepage:65001 /target:winexe /platform:anycpu /out:furina.exe ^
     /win32manifest:furina.manifest ^
+    /win32icon:furina.ico ^
     furina.cs furina_gui.cs tutorial_text.cs ^
+    /resource:furina.ico,furina.ico ^
+    /resource:fonts/SmileySans-Oblique.ttf,SmileySans-Oblique.ttf ^
+    /resource:furina-silhouette.png,furina-silhouette.png ^
     /reference:System.Windows.Forms.dll ^
     /reference:System.Drawing.dll
 if errorlevel 1 (
